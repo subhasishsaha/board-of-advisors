@@ -16,6 +16,7 @@ from board.cli_ui import (
     render_sessions_history_table,
     render_message,
     render_plan,
+    render_slash_menu,
     highlight_tags,
 )
 from board.orchestrator import BoardOrchestrator, BoardMessage
@@ -23,6 +24,55 @@ from board.advisor import Advisor
 
 # Global status tracker for clean suspension and resumption
 _active_status = None
+
+def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
+    """
+    Detects and prevents chaining of slash commands.
+    Returns (is_chained, error_message).
+    """
+    text = raw_input.strip()
+    if not text:
+        return False, None
+
+    # Check 1: Multiple leading slashes e.g. '//new', '///help'
+    if text.startswith("//"):
+        return True, "Multiple consecutive slashes detected ('//'). Please run a single command using '/'."
+
+    # Check 2: Compound chaining operators e.g. '/history && /new', '/plan ; /advisors', '/new & /suspend'
+    chain_separators = [r"&&", r"\|\|", r";", r"\|", r"&"]
+    for sep in chain_separators:
+        sep_clean = sep.replace("\\", "")
+        if re.search(r"\s*" + sep + r"\s*/", text) or (text.startswith("/") and re.search(r"\s+" + sep + r"\s+", text)):
+            return True, f"Command chaining with separator '{sep_clean}' is not allowed. Please run one command at a time."
+
+    # Check 3: Concatenated slash commands without spaces e.g. '/history/new' or '/plan/advisors'
+    if re.match(r"^/\w+/\w+", text):
+        return True, f"Chained slash commands detected ('{text.split()[0]}'). Please run one command at a time."
+
+    # Check 4: Multiple slash tokens or command keywords e.g. '/history /new', '/delete 1 /plan', '/new /suspend'
+    if text.startswith("/"):
+        tokens = text.split()
+        if len(tokens) > 1:
+            # Check if any subsequent token begins with '/'
+            subsequent_slash_tokens = [tok for tok in tokens[1:] if tok.startswith("/")]
+            if subsequent_slash_tokens:
+                chained_example = f"{tokens[0]} {subsequent_slash_tokens[0]}"
+                return True, f"Command chaining is not allowed ('{chained_example}'). Please run one command at a time."
+
+            # Check if any subsequent token is a known command keyword
+            known_command_names = {
+                "new", "history", "hist", "suspend", "advisors", "advisor",
+                "plan", "memory", "memories", "help", "exit", "quit", "delete", "del", "rm"
+            }
+            first_cmd = tokens[0].lstrip("/").lower()
+            if first_cmd in ("history", "advisors", "advisor", "plan", "memory", "memories", "help", "exit", "quit"):
+                if tokens[1].lower() in known_command_names:
+                    return True, f"Command chaining is not allowed ('{tokens[0]} {tokens[1]}'). Please run one command at a time."
+            elif first_cmd in ("delete", "del", "rm"):
+                if len(tokens) > 2 and tokens[2].lower() in known_command_names:
+                    return True, f"Command chaining is not allowed ('{tokens[0]} {tokens[1]} {tokens[2]}'). Please run one command at a time."
+
+    return False, None
 
 def parse_command(user_input: str) -> Tuple[Optional[str], str]:
     """
@@ -32,6 +82,10 @@ def parse_command(user_input: str) -> Tuple[Optional[str], str]:
     text = user_input.strip()
     if not text:
         return None, ""
+
+    # Direct slash trigger to open options menu
+    if text in ("/", "/?", "/menu", "/options"):
+        return "slash", ""
 
     is_slash = text.startswith("/")
     cleaned = text[1:].strip() if is_slash else text
@@ -43,7 +97,7 @@ def parse_command(user_input: str) -> Tuple[Optional[str], str]:
     known_commands = {
         "new", "history", "hist", "suspend", "advisors", "advisor",
         "plan", "memory", "memories", "help", "?", "exit", "quit",
-        "delete", "del", "rm"
+        "delete", "del", "rm", "slash", "menu", "options"
     }
 
     if is_slash or keyword in known_commands:
@@ -54,6 +108,7 @@ def parse_command(user_input: str) -> Tuple[Optional[str], str]:
 def show_help():
     console.print("""
 [bold cyan]Available Commands:[/bold cyan]
+  [yellow]/[/yellow]                     - Show the interactive Slash Command menu
   [yellow]/new [problem][/yellow]       - Create a brand new session with a fresh tailored board
   [yellow]/history[/yellow]             - Browse previous sessions to load or delete ('d #')
   [yellow]/delete <#>[/yellow]          - Delete a specific saved session by index or ID
@@ -75,6 +130,84 @@ def show_memories(orchestrator: BoardOrchestrator):
         console.print(f"\n[bold {adv.color}]{adv.avatar} {adv.name} ({adv.tag}) Memory:[/bold {adv.color}]")
         console.print(mem_text, style="dim")
     console.print()
+
+async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
+    """
+    Triggered when the user enters '/' to display all available slash commands
+    and prompts for instant numeric (1-9) or command selection.
+    """
+    render_slash_menu(
+        has_board=bool(orchestrator.advisors),
+        has_plan=bool(orchestrator.final_plan),
+    )
+    selection = Prompt.ask(
+        "[bold yellow]Select an option [1-9], type a command, or press Enter to return[/bold yellow]",
+        default="",
+    ).strip()
+
+    if not selection:
+        console.print("[dim]Returned to prompt.[/dim]\n")
+        return False
+
+    # Prevent chaining in the options prompt
+    is_chained, chain_err = check_command_chaining(selection)
+    if is_chained:
+        console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+        return False
+
+    num_map = {
+        "1": "new",
+        "2": "history",
+        "3": "delete",
+        "4": "suspend",
+        "5": "advisors",
+        "6": "plan",
+        "7": "memory",
+        "8": "help",
+        "9": "exit",
+    }
+
+    if selection in num_map:
+        cmd = num_map[selection]
+        arg = ""
+    else:
+        cmd, arg = parse_command(selection)
+
+    if cmd is None:
+        console.print(f"[red]Invalid selection: '{selection}'. Type / for available options.[/red]\n")
+        return False
+
+    if cmd in ("exit", "quit"):
+        console.print("[bold green]Thank you for consulting your Board of Advisors. Good luck with your execution![/bold green]")
+        sys.exit(0)
+    elif cmd in ("help", "?"):
+        show_help()
+    elif cmd in ("history", "hist"):
+        await handle_history_command(orchestrator)
+    elif cmd in ("delete", "del", "rm"):
+        await handle_delete_command(orchestrator, arg)
+    elif cmd == "new":
+        await handle_new_command(orchestrator, arg)
+    elif cmd == "suspend":
+        await handle_suspend_command(orchestrator, arg)
+    elif cmd in ("advisors", "advisor"):
+        if orchestrator.advisors:
+            render_advisors_table(orchestrator.advisors)
+        else:
+            console.print("[dim]No active board assembled yet. Enter a problem or load a past session with /history.[/dim]\n")
+    elif cmd == "plan":
+        if orchestrator.final_plan:
+            render_plan(orchestrator.final_plan)
+        else:
+            console.print("[dim]No plan generated yet.[/dim]\n")
+    elif cmd in ("memory", "memories"):
+        show_memories(orchestrator)
+    elif cmd in ("slash", "menu", "options"):
+        return await handle_slash_trigger(orchestrator)
+    else:
+        console.print(f"[red]Unknown command: /{cmd}. Type / for available options.[/red]\n")
+
+    return True
 
 async def ask_user_callback(advisor: Advisor, question: str) -> str:
     """
@@ -133,6 +266,12 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
             console.print("[dim]History browser closed.[/dim]\n")
             return False
 
+        # Prevent chained delete commands
+        is_chained, chain_err = check_command_chaining(choice)
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            continue
+
         # Check for delete syntax: 'd 2', 'del 2', 'delete 2', 'rm 2', 'd2'
         del_match = re.match(r"^(?:d|del|delete|rm)\s*(\d+)$", choice_lower)
         if del_match:
@@ -190,6 +329,10 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
     target_id = None
 
     if arg:
+        is_chained, chain_err = check_command_chaining(f"/delete {arg}")
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            return
         arg_clean = arg.strip().lstrip("#")
         if arg_clean.isdigit():
             target_idx = int(arg_clean)
@@ -244,14 +387,27 @@ async def handle_suspend_command(orchestrator: BoardOrchestrator, arg: str = "")
         console.print("[red]No active board assembled yet. First describe a problem or load a session with /history.[/red]\n")
         return
 
+    new_problem = arg.strip()
+    if new_problem:
+        is_chained, chain_err = check_command_chaining(f"/suspend {new_problem}")
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            return
+
     console.print(f"\n[bold yellow]⏸️ Suspending Current Board Deliberation (Same Session: {orchestrator.session_id})[/bold yellow]")
     console.print("[dim]The board remains assembled with all its context, personas, and memory.[/dim]\n")
 
-    new_problem = arg.strip()
     if not new_problem:
-        new_problem = Prompt.ask("[bold green]Enter new problem, pivot, or sub-task for this board[/bold green]").strip()
+        new_problem = Prompt.ask("[bold green]Enter new problem, pivot, or sub-task for this board (or / for options)[/bold green]").strip()
         if not new_problem:
             console.print("[dim]Suspension cancelled. Resuming current focus.[/dim]\n")
+            return
+        if new_problem in ("/", "/?", "/menu", "/options"):
+            await handle_slash_trigger(orchestrator)
+            return
+        is_chained, chain_err = check_command_chaining(new_problem)
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
             return
 
     _active_status = console.status(f"[bold cyan]🏛️ Board is deliberating on the new problem within session {orchestrator.session_id}...[/bold cyan]", spinner="dots")
@@ -267,12 +423,25 @@ async def handle_suspend_command(orchestrator: BoardOrchestrator, arg: str = "")
 
 async def handle_new_command(orchestrator: BoardOrchestrator, arg: str = ""):
     """Starts a completely new session with a new problem and fresh bespoke board."""
-    console.print("\n[bold yellow]🆕 Starting a brand new session...[/bold yellow]")
     new_problem = arg.strip()
+    if new_problem:
+        is_chained, chain_err = check_command_chaining(f"/new {new_problem}")
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            return
+
+    console.print("\n[bold yellow]🆕 Starting a brand new session...[/bold yellow]")
     if not new_problem:
-        new_problem = Prompt.ask("[bold green]Enter your problem for the new session[/bold green]").strip()
+        new_problem = Prompt.ask("[bold green]Enter your problem for the new session (or / for options)[/bold green]").strip()
         if not new_problem:
             console.print("[dim]New session cancelled.[/dim]\n")
+            return
+        if new_problem in ("/", "/?", "/menu", "/options"):
+            await handle_slash_trigger(orchestrator)
+            return
+        is_chained, chain_err = check_command_chaining(new_problem)
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
             return
 
     orchestrator.reset_session()
@@ -320,13 +489,13 @@ async def main():
         console.print(f"[bold red]Initialization Error:[/bold red] {e}")
         sys.exit(1)
 
-    console.print("[bold yellow]Describe your strategic dilemma, or enter a command (/help, /history, /new):[/bold yellow]\n")
+    console.print("[bold yellow]Describe your strategic dilemma, or type / to see available options:[/bold yellow]\n")
 
     while True:
         prompt_label = (
-            "[bold green]Your Problem (or /command)[/bold green]"
+            "[bold green]Your Dilemma (type / for options)[/bold green]"
             if not orchestrator.current_problem
-            else "[bold blue]You[/bold blue]"
+            else "[bold blue]You (type / for options)[/bold blue]"
         )
 
         try:
@@ -338,12 +507,25 @@ async def main():
         if not raw_input:
             continue
 
+        # 1. Check for command chaining and prevent it
+        is_chained, chain_err = check_command_chaining(raw_input)
+        if is_chained:
+            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            continue
+
+        # 2. Check for single slash trigger to show options menu
+        if raw_input in ("/", "/?", "/menu", "/options", "slash"):
+            await handle_slash_trigger(orchestrator)
+            continue
+
         cmd, arg = parse_command(raw_input)
 
         if cmd is not None:
             if cmd in ("exit", "quit"):
                 console.print("[bold green]Thank you for consulting your Board of Advisors. Good luck with your execution![/bold green]")
                 break
+            elif cmd in ("slash", "menu", "options"):
+                await handle_slash_trigger(orchestrator)
             elif cmd in ("help", "?"):
                 show_help()
             elif cmd in ("history", "hist"):
@@ -367,7 +549,8 @@ async def main():
             elif cmd in ("memory", "memories"):
                 show_memories(orchestrator)
             else:
-                console.print(f"[red]Unknown command: /{cmd}. Type /help for available commands.[/red]\n")
+                console.print(f"[red]Unknown command: /{cmd}.[/red]\n")
+                render_slash_menu(has_board=bool(orchestrator.advisors), has_plan=bool(orchestrator.final_plan))
             continue
 
         # If it wasn't a command, it's either the initial problem or a follow-up
@@ -375,7 +558,7 @@ async def main():
             # First problem!
             await run_problem_session(orchestrator, raw_input)
             console.print("\n[bold cyan]💬 The board is now open for follow-up questions and discussion.[/bold cyan]")
-            console.print("[dim]Commands: /suspend (pivot in same session), /new (fresh session), /history, /plan, /advisors, /help[/dim]\n")
+            console.print("[dim]Commands: type / for options menu, /suspend to pivot, /new for fresh session, /plan[/dim]\n")
         else:
             # Active deliberation follow-up
             with console.status("[bold cyan]Advisors are reviewing your follow-up...[/bold cyan]", spinner="dots"):

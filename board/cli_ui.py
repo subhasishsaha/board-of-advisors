@@ -90,6 +90,42 @@ def render_sessions_history_table(sessions: list) -> None:
     console.print(table)
     console.print()
 
+def render_slash_menu(has_board: bool = False, has_plan: bool = False) -> None:
+    """Render an interactive options menu showing all available slash commands."""
+    table = Table(
+        title="🧭 Available Slash Commands",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        title_style="bold white",
+        caption="[dim]Tip: Enter command (e.g. [bold yellow]/history[/bold yellow]) or option number [bold yellow][1-9][/bold yellow]  •  Chaining is blocked[/dim]",
+        caption_justify="center",
+    )
+    table.add_column("#", style="bold yellow", width=4, justify="center")
+    table.add_column("Command", style="bold cyan", width=20)
+    table.add_column("Description", style="white", width=46)
+    table.add_column("Context Status", style="dim", width=18, justify="center")
+
+    status_board = "[green]Active[/green]" if has_board else "[dim]No board yet[/dim]"
+    status_plan = "[green]Ready[/green]" if has_plan else "[dim]Not generated[/dim]"
+
+    commands_data = [
+        ("1", "/new [problem]", "Start a fresh session with bespoke advisors", "[cyan]Available[/cyan]"),
+        ("2", "/history", "Browse saved sessions to load or delete ('d #')", "[cyan]Available[/cyan]"),
+        ("3", "/delete <#>", "Delete a saved session by index or ID", "[cyan]Available[/cyan]"),
+        ("4", "/suspend [pivot]", "Suspend current debate in SAME session and pivot", status_board),
+        ("5", "/advisors", "Show active board members and their tags", status_board),
+        ("6", "/plan", "Review the consolidated Plan of Action", status_plan),
+        ("7", "/memory", "View persistent advisor memories", status_board),
+        ("8", "/help", "Show full command help & guidelines", "[cyan]Available[/cyan]"),
+        ("9", "/exit", "Exit the council session", "[dim]Quit[/dim]"),
+    ]
+
+    for num, cmd_name, desc, status in commands_data:
+        table.add_row(num, cmd_name, desc, status)
+
+    console.print(table)
+    console.print()
+
 def highlight_tags(text: str) -> Text:
     """Highlight @Advisor tags in message body."""
     rich_text = Text()

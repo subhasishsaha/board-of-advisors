@@ -7,8 +7,11 @@ from unittest.mock import patch, AsyncMock
 
 from board.config import SESSIONS_DIR
 from board.orchestrator import BoardOrchestrator
+from board.cli_ui import render_slash_menu
 from main import (
     parse_command,
+    check_command_chaining,
+    handle_slash_trigger,
     handle_history_command,
     handle_delete_command,
     handle_suspend_command,
@@ -21,6 +24,16 @@ class TestSlashCommands(unittest.TestCase):
 
     def test_parse_command(self):
         """Verify command parser handles all slash and keyword variants."""
+        # Slash trigger
+        cmd, arg = parse_command("/")
+        self.assertEqual(cmd, "slash")
+
+        cmd, arg = parse_command("/?")
+        self.assertEqual(cmd, "slash")
+
+        cmd, arg = parse_command("/menu")
+        self.assertEqual(cmd, "slash")
+
         # Help
         cmd, arg = parse_command("/help")
         self.assertEqual(cmd, "help")
@@ -81,13 +94,88 @@ class TestSlashCommands(unittest.TestCase):
         self.assertIsNone(cmd)
         self.assertEqual(arg, "")
 
+    def test_prevent_chaining_slash_commands(self):
+        """Verify command chaining detection prevents chained commands in all forms."""
+        # 1. Chained space-separated commands
+        is_chained, err = check_command_chaining("/history /new")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        is_chained, err = check_command_chaining("/new /suspend")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        is_chained, err = check_command_chaining("/plan /advisors")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        is_chained, err = check_command_chaining("/delete 1 /plan")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        # 2. Chained keywords without second slash
+        is_chained, err = check_command_chaining("/history new")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        is_chained, err = check_command_chaining("/plan advisors")
+        self.assertTrue(is_chained)
+        self.assertIn("Command chaining is not allowed", err)
+
+        # 3. Separator-based chaining (&&, ||, ;, |, &)
+        is_chained, err = check_command_chaining("/history && /new")
+        self.assertTrue(is_chained)
+        self.assertIn("&&", err)
+
+        is_chained, err = check_command_chaining("/plan ; /advisors")
+        self.assertTrue(is_chained)
+        self.assertIn(";", err)
+
+        is_chained, err = check_command_chaining("/new & /suspend")
+        self.assertTrue(is_chained)
+        self.assertIn("&", err)
+
+        is_chained, err = check_command_chaining("/history | /plan")
+        self.assertTrue(is_chained)
+        self.assertIn("|", err)
+
+        # 4. Multiple consecutive slashes
+        is_chained, err = check_command_chaining("//new")
+        self.assertTrue(is_chained)
+        self.assertIn("Multiple consecutive slashes", err)
+
+        is_chained, err = check_command_chaining("///help")
+        self.assertTrue(is_chained)
+        self.assertIn("Multiple consecutive slashes", err)
+
+        # 5. Concatenated slash commands
+        is_chained, err = check_command_chaining("/history/new")
+        self.assertTrue(is_chained)
+        self.assertIn("Chained slash commands detected", err)
+
+        # 6. Valid non-chained commands must pass through
+        is_chained, err = check_command_chaining("/")
+        self.assertFalse(is_chained)
+        self.assertIsNone(err)
+
+        is_chained, err = check_command_chaining("/new Should we launch next month?")
+        self.assertFalse(is_chained)
+        self.assertIsNone(err)
+
+        is_chained, err = check_command_chaining("/suspend We need 24/7 technical support")
+        self.assertFalse(is_chained)
+        self.assertIsNone(err)
+
+        is_chained, err = check_command_chaining("Should we launch on 2026/11/15 or wait?")
+        self.assertFalse(is_chained)
+        self.assertIsNone(err)
+
     def test_session_creation_loading_and_deletion(self):
         """Verify session JSON persistence, listing, loading, and deletion."""
         orchestrator = BoardOrchestrator()
         test_session_id = f"test_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         test_file = SESSIONS_DIR / f"session_{test_session_id}.json"
 
-        # 1. Create a dummy test session file
         dummy_data = {
             "session_id": test_session_id,
             "timestamp": datetime.now().isoformat(),
@@ -127,12 +215,12 @@ class TestSlashCommands(unittest.TestCase):
 
         self.assertTrue(test_file.exists())
 
-        # 2. Check listing
+        # Check listing
         sessions = orchestrator.list_saved_sessions()
         session_ids = [s["session_id"] for s in sessions]
         self.assertIn(test_session_id, session_ids)
 
-        # 3. Check loading
+        # Check loading
         loaded = orchestrator.load_session_by_id(test_session_id)
         self.assertTrue(loaded)
         self.assertEqual(orchestrator.current_problem, "Should we pivot from B2C to B2B SaaS?")
@@ -141,18 +229,53 @@ class TestSlashCommands(unittest.TestCase):
         self.assertEqual(len(orchestrator.messages), 2)
         self.assertEqual(orchestrator.final_plan, "Pivot conditionally within 90 days.")
 
-        # 4. Check deletion
+        # Check deletion
         deleted = orchestrator.delete_session_by_id(test_session_id)
         self.assertTrue(deleted)
         self.assertFalse(test_file.exists())
 
-        # Listing after delete should not include test session
         sessions_after = orchestrator.list_saved_sessions()
         ids_after = [s["session_id"] for s in sessions_after]
         self.assertNotIn(test_session_id, ids_after)
 
 
 class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
+
+    async def test_handle_slash_trigger_shows_options_menu(self):
+        """Verify giving '/' displays the options menu and executes selected option."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        orchestrator.final_plan = "Mock Action Plan"
+
+        # User gives '/' -> menu shown -> selects '6' (/plan)
+        with patch("rich.prompt.Prompt.ask", return_value="6"), \
+             patch("main.render_plan") as mock_render_plan:
+            res = await handle_slash_trigger(orchestrator)
+            self.assertTrue(res)
+            mock_render_plan.assert_called_once_with("Mock Action Plan")
+
+    async def test_handle_slash_trigger_numeric_help(self):
+        """Verify selecting '8' in slash menu shows help."""
+        orchestrator = BoardOrchestrator()
+        with patch("rich.prompt.Prompt.ask", return_value="8"), \
+             patch("main.show_help") as mock_help:
+            res = await handle_slash_trigger(orchestrator)
+            self.assertTrue(res)
+            mock_help.assert_called_once()
+
+    async def test_handle_slash_trigger_cancel(self):
+        """Verify pressing Enter in slash menu cancels cleanly."""
+        orchestrator = BoardOrchestrator()
+        with patch("rich.prompt.Prompt.ask", return_value=""):
+            res = await handle_slash_trigger(orchestrator)
+            self.assertFalse(res)
+
+    async def test_handle_slash_trigger_chained_input_rejected(self):
+        """Verify chained input in slash options prompt is blocked."""
+        orchestrator = BoardOrchestrator()
+        with patch("rich.prompt.Prompt.ask", return_value="/new /history"):
+            res = await handle_slash_trigger(orchestrator)
+            self.assertFalse(res)
 
     async def test_handle_history_command_delete_flow(self):
         """Simulate user navigating /history and deleting a session with 'd #'."""
@@ -170,7 +293,6 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
                 "final_plan": "Test Plan",
             }, f)
 
-        # Find 1-based index of this session
         sessions = orchestrator.list_saved_sessions()
         target_idx = None
         for i, s in enumerate(sessions, 1):
@@ -180,13 +302,11 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(target_idx)
 
-        # User inputs: 'd <target_idx>', then confirm 'y', then '' (press enter to return)
         prompt_inputs = [f"d {target_idx}", "y", ""]
         with patch("rich.prompt.Prompt.ask", side_effect=prompt_inputs):
             res = await handle_history_command(orchestrator)
-            self.assertFalse(res)  # Returned without loading a session
+            self.assertFalse(res)
 
-        # Verify session was deleted
         self.assertFalse(test_file.exists())
 
     async def test_handle_history_command_load_flow(self):
@@ -214,14 +334,12 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(target_idx)
 
-        # User enters session number
         with patch("rich.prompt.Prompt.ask", return_value=str(target_idx)):
             res = await handle_history_command(orchestrator)
-            self.assertTrue(res)  # Successfully loaded
+            self.assertTrue(res)
             self.assertEqual(orchestrator.session_id, test_session_id)
             self.assertEqual(orchestrator.current_problem, "Test Problem to Load")
 
-        # Cleanup
         test_file.unlink(missing_ok=True)
 
     async def test_handle_delete_command_direct(self):
@@ -246,7 +364,6 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
                 target_idx = i
                 break
 
-        # Call handle_delete_command with target_idx and confirm 'y'
         with patch("rich.prompt.Prompt.ask", return_value="y"):
             await handle_delete_command(orchestrator, str(target_idx))
 
@@ -256,7 +373,6 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         """Verify /suspend when no board is assembled warns cleanly without error."""
         orchestrator = BoardOrchestrator()
         orchestrator.advisors = []
-        # Should return without raising
         await handle_suspend_command(orchestrator, "New problem")
 
     async def test_handle_suspend_command_with_pivot(self):
@@ -285,7 +401,6 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             await handle_new_command(orchestrator, "Brand new startup dilemma")
             mock_run.assert_awaited_once_with(orchestrator, "Brand new startup dilemma")
 
-        # Session ID should have changed and previous state reset
         self.assertNotEqual(orchestrator.session_id, old_session_id)
         self.assertEqual(orchestrator.current_problem, "")
         self.assertEqual(orchestrator.advisors, [])
