@@ -98,11 +98,12 @@ def render_message(msg: BoardMessage, advisor_map: dict) -> None:
     role = adv.role if adv else "Advisor"
 
     stage_badge = ""
-    if msg.stage == "initial_assessment":
-        stage_badge = "[Initial Perspective]"
-    elif "debate_round" in msg.stage:
-        round_num = msg.stage.split("_")[-1]
-        stage_badge = f"[Discussion Round {round_num}]"
+    if "opening" in msg.stage or msg.stage == "initial_assessment":
+        stage_badge = "[Round 1 - Opening Assessment]"
+    elif "final" in msg.stage:
+        stage_badge = "[Round 3 - Final Deliberation & Verdict]"
+    elif "round_2" in msg.stage or "debate" in msg.stage:
+        stage_badge = "[Round 2 - Cross-Examination]"
     elif msg.stage == "followup_response":
         stage_badge = "[Follow-up Response]"
 

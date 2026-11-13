@@ -97,10 +97,12 @@ Keep your response punchy, high-signal, and executive-level (under 250 words). A
         transcript_so_far: str,
         all_advisors: List["Advisor"],
         targeted_questions: Optional[List[str]] = None,
+        is_final_round: bool = False,
     ) -> str:
         """
         Respond during the collaborative debate phase.
         Specifically addresses any direct questions tagged to this advisor.
+        If is_final_round is True, mandates reaching a definitive conclusion.
         """
         directory = self._format_board_directory(all_advisors)
         memory_context = self.memory.format_memory_for_prompt()
@@ -110,6 +112,20 @@ Keep your response punchy, high-signal, and executive-level (under 250 words). A
             questions_text = "\n=== DIRECT QUESTIONS ADDRESSED TO YOU ==="
             for q in targeted_questions:
                 questions_text += f"\n- {q}"
+
+        if is_final_round:
+            round_directives = """=== ⚠️ FINAL ROUND MANDATE ===
+THIS IS THE FINAL ROUND OF DELIBERATION. You MUST come to a definitive conclusion!
+1. Reconcile remaining trade-offs and resolve any outstanding disputes with your fellow board members.
+2. State your clear, unambiguous final stance on what the user must do (e.g., Go, No-Go, or specific Conditional Execution).
+3. Deliver your final verdict and the single most critical safeguard or execution milestone.
+4. Do NOT leave open-ended questions or punt decisions to future rounds; this is the conclusion."""
+        else:
+            round_directives = """=== YOUR TURN INSTRUCTIONS ===
+1. If colleagues tagged you ({self.tag}) or asked you questions above, ANSWER THEM DIRECTLY first with decisive reasoning.
+2. Critique, support, or pressure-test the points made by other advisors in the transcript. Don't just agree; sharpen the trade-offs.
+3. Suggest a concrete path forward that synthesizes the best ideas while addressing the risks.
+4. Feel free to tag another colleague using their exact @tag if you need their input on a specific trade-off."""
 
         prompt = f"""You are {self.name} ({self.tag}), {self.role}. You are participating in an active, round-table executive debate on the user's board of advisors.
 
@@ -129,11 +145,7 @@ Keep your response punchy, high-signal, and executive-level (under 250 words). A
 {transcript_so_far}
 {questions_text}
 
-=== YOUR TURN INSTRUCTIONS ===
-1. If colleagues tagged you ({self.tag}) or asked you questions above, ANSWER THEM DIRECTLY first with decisive reasoning.
-2. Critique, support, or pressure-test the points made by other advisors in the transcript. Don't just agree; sharpen the trade-offs.
-3. Suggest a concrete path forward that synthesizes the best ideas while addressing the risks.
-4. Feel free to tag another colleague (e.g., @Elena, @Marcus, @Aris, @Maya) if you need their input on a specific trade-off.
+{round_directives}
 
 Keep your response direct, authentic to your persona, and under 250 words."""
 

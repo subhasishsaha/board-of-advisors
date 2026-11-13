@@ -7,10 +7,13 @@ from typing import Any, Callable, Dict, List, Optional
 import yaml
 
 from board.advisor import Advisor
-from board.config import DEFAULT_ADVISORS_CONFIG, DEFAULT_DISCUSSION_ROUNDS, SESSIONS_DIR
+from board.advisor_builder import parse_advisors_json
+from board.config import DEFAULT_ADVISORS_CONFIG, SESSIONS_DIR
 from board.invoker import AntigravityInvoker
 
 logger = logging.getLogger(__name__)
+
+MAX_ROUNDS = 3
 
 class BoardMessage:
     def __init__(self, sender: str, tag: str, content: str, stage: str):
@@ -32,18 +35,19 @@ class BoardMessage:
 class BoardOrchestrator:
     """
     Coordinates the multi-agent chat debate between autonomous board members,
-    handles @mention parsing and targeted question routing, and synthesizes
-    the final Plan of Action.
+    supports dynamic generation of problem-tailored advisors (up to 10),
+    handles @mention parsing, targeted question routing, flexible rounds (at most 3),
+    and synthesizes the final Plan of Action.
     """
 
     def __init__(
         self,
         config_path: Optional[Path] = None,
-        discussion_rounds: int = DEFAULT_DISCUSSION_ROUNDS,
+        max_rounds: int = MAX_ROUNDS,
         on_message_callback: Optional[Callable[[BoardMessage], None]] = None,
     ):
         self.config_path = config_path or DEFAULT_ADVISORS_CONFIG
-        self.discussion_rounds = discussion_rounds
+        self.max_rounds = max_rounds
         self.on_message_callback = on_message_callback
 
         self.advisors: List[Advisor] = []
@@ -54,18 +58,25 @@ class BoardOrchestrator:
         self.final_plan: str = ""
 
         self.synthesizer_invoker = AntigravityInvoker()
-        self._load_advisors()
 
-    def _load_advisors(self) -> None:
-        """Load advisor profiles and initialize instances."""
+    def _load_predefined_advisors(self) -> None:
+        """Fallback to load default predefined advisors from YAML config."""
         if not self.config_path.exists():
-            raise FileNotFoundError(f"Advisors config not found at: {self.config_path}")
+            return
 
         with open(self.config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         advisor_defs = data.get("advisors", [])
-        for a_def in advisor_defs:
+        self._register_advisor_defs(advisor_defs)
+
+    def _register_advisor_defs(self, advisor_defs: List[Dict[str, Any]]) -> None:
+        """Register a list of advisor definitions into the orchestrator."""
+        self.advisors = []
+        self.advisors_by_tag = {}
+        self.advisors_by_id = {}
+
+        for a_def in advisor_defs[:10]:  # Cap at 10 advisors
             adv = Advisor(
                 advisor_id=a_def["id"],
                 name=a_def["name"],
@@ -80,6 +91,52 @@ class BoardOrchestrator:
             self.advisors.append(adv)
             self.advisors_by_tag[adv.tag.lower()] = adv
             self.advisors_by_id[adv.id] = adv
+
+    async def build_dynamic_advisors(self, problem: str) -> List[Advisor]:
+        """
+        Dynamically synthesize a bespoke board of at most 10 advisors tailored
+        specifically to the user's decision dilemma.
+        """
+        prompt = f"""You are the Master Executive Search Architect and Corporate Governance Lead.
+The user is facing this strategic decision problem:
+"{problem}"
+
+=== OBJECTIVE ===
+Assemble a bespoke, world-class Board of Advisors specifically tailored to evaluate and resolve this exact dilemma.
+Select between 3 and 10 distinct advisors (at most 10). Choose the optimal number based on the multifaceted nature of the challenge (typically 4 to 6).
+
+Requirements for each advisor:
+1. Diversity of Thought: Include opposing forces (e.g. aggressive growth, downside risk, technical feasibility, legal/compliance, customer value, operational execution).
+2. Domain Relevance: Their functional expertise must directly address key risks and opportunities in the user's dilemma.
+3. Realistic & Vivid Personas: Give them distinct cognitive biases, tones, and professional philosophies so they challenge each other authentically.
+4. Unique @Tags: Give each an @Tag (e.g., @Rachel, @David, @Marcus, @Elena) so colleagues can tag them directly.
+
+Output ONLY a valid JSON array of advisor objects with these exact keys:
+[
+  {{
+    "id": "short_unique_id",
+    "name": "Full Name",
+    "tag": "@UniqueTag",
+    "role": "Executive Title & Domain",
+    "avatar": "Single Emoji (e.g. 🎯, 📊, ⚡, ⚖️, 🛡️, 🚀, 💡)",
+    "color": "Rich color name (e.g. bright_magenta, bright_cyan, bright_green, bright_yellow, bright_blue, gold1, plum2, turquoise2)",
+    "bio": "1-2 sentence background",
+    "persona": "Detailed persona instructions describing how they think, what they scrutinize, how they debate, and their communication style",
+    "core_beliefs": ["Core principle 1", "Core principle 2"]
+  }}
+]
+"""
+        try:
+            raw_response = await self.synthesizer_invoker.invoke_async(prompt)
+            advisor_defs = parse_advisors_json(raw_response)
+            if not advisor_defs:
+                raise ValueError("Parsed advisor list is empty")
+            self._register_advisor_defs(advisor_defs)
+            return self.advisors
+        except Exception as e:
+            logger.error(f"Dynamic advisor generation failed ({e}), falling back to predefined advisors")
+            self._load_predefined_advisors()
+            return self.advisors
 
     def _record_message(self, sender: str, tag: str, content: str, stage: str) -> BoardMessage:
         msg = BoardMessage(sender, tag, content, stage)
@@ -99,30 +156,55 @@ class BoardOrchestrator:
     def extract_mentions(self, text: str) -> List[str]:
         """Find all @Advisor tags mentioned in the text."""
         mentions = []
-        # Find words starting with @
         found = re.findall(r"@\w+", text)
         for tag in found:
             clean_tag = tag.lower()
             if clean_tag in self.advisors_by_tag:
                 mentions.append(self.advisors_by_tag[clean_tag].tag)
-        return list(dict.fromkeys(mentions))  # deduplicate preserving order
+        return list(dict.fromkeys(mentions))
+
+    async def _check_if_consensus_reached(self, problem: str) -> bool:
+        """
+        Check if the board has reached substantial alignment and can conclude
+        before the maximum round limit.
+        """
+        transcript_text = self.format_transcript(last_n=12)
+        prompt = f"""You are the Board Secretary. Read the recent debate between the advisors:
+Problem: "{problem}"
+
+Recent Discussion:
+{transcript_text}
+
+Question: Have the advisors reached substantial consensus or a clear unified direction where further debate is unnecessary?
+Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active disputes, direct questions to answer, or stark disagreements."""
+
+        try:
+            resp = await self.synthesizer_invoker.invoke_async(prompt)
+            return "YES" in resp.strip().upper()
+        except Exception:
+            return False
 
     async def run_deliberation(self, problem: str, user_context: str = "") -> str:
         """
         Execute the full Board of Advisors deliberation pipeline:
-        1. Opening statements from all advisors (concurrent/detached).
-        2. Discussion & debate rounds routing targeted @mentions.
-        3. Comprehensive action plan synthesis.
-        4. Memory updates.
+        1. Dynamically build tailored advisors if not already configured.
+        2. Opening statements from all advisors (concurrent/detached).
+        3. Flexible discussion rounds (at most 3 rounds).
+           On round 3 (the last round), explicitly mandate that advisors come to a conclusion.
+        4. Comprehensive action plan synthesis.
+        5. Memory persistence.
         """
         self.current_problem = problem
         self.messages.clear()
 
-        # Step 0: Record the user problem
+        # Build dynamic advisors if not already generated
+        if not self.advisors:
+            await self.build_dynamic_advisors(problem)
+
+        # Record the user problem
         self._record_message("USER", "@User", problem, stage="problem")
 
-        # Step 1: Initial Round (Opening Perspectives)
-        # We can invoke advisors in parallel via detached agy
+        # Step 1: Round 1 - Opening Perspectives
         async def fetch_initial(advisor: Advisor):
             response = await advisor.generate_initial_assessment(
                 problem=problem,
@@ -134,33 +216,39 @@ class BoardOrchestrator:
         initial_tasks = [fetch_initial(a) for a in self.advisors]
         initial_results = await asyncio.gather(*initial_tasks, return_exceptions=True)
 
-        # Record initial assessments
         pending_questions: Dict[str, List[str]] = {a.tag: [] for a in self.advisors}
         for res in initial_results:
             if isinstance(res, Exception):
                 logger.error(f"Error in initial assessment: {res}")
                 continue
             advisor, response = res
-            self._record_message(advisor.name, advisor.tag, response, stage="initial_assessment")
+            self._record_message(advisor.name, advisor.tag, response, stage="round_1_opening")
 
-            # Check for tags in the response
+            # Extract tags from response
             tags = self.extract_mentions(response)
             for t in tags:
                 pending_questions[t].append(f"From {advisor.name} ({advisor.tag}): {response[:150]}...")
 
-        # Step 2: Discussion Rounds
-        for round_idx in range(1, self.discussion_rounds + 1):
-            stage_name = f"debate_round_{round_idx}"
+        # Step 2: Flexible Discussion Rounds (Up to MAX_ROUNDS = 3)
+        current_round = 2
+        while current_round <= self.max_rounds:
+            is_final = (current_round == self.max_rounds)
 
-            # In debate round, we give priority to advisors who were tagged
-            # Order advisors: tagged ones first, then others
-            tagged_order = sorted(
+            # Check if consensus was already reached before round 3
+            if current_round == 3:
+                # Force final round mandate on round 3
+                is_final = True
+
+            stage_name = f"round_{current_round}_final" if is_final else f"round_{current_round}_debate"
+
+            # Sort advisors: those tagged with direct questions speak first
+            speaking_order = sorted(
                 self.advisors,
                 key=lambda a: len(pending_questions.get(a.tag, [])),
                 reverse=True
             )
 
-            for advisor in tagged_order:
+            for advisor in speaking_order:
                 direct_qs = pending_questions.get(advisor.tag, [])
                 transcript_text = self.format_transcript()
 
@@ -170,20 +258,36 @@ class BoardOrchestrator:
                         transcript_so_far=transcript_text,
                         all_advisors=self.advisors,
                         targeted_questions=direct_qs if direct_qs else None,
+                        is_final_round=is_final,
                     )
                     self._record_message(advisor.name, advisor.tag, response, stage=stage_name)
 
                     # Clear handled questions
                     pending_questions[advisor.tag] = []
 
-                    # Extract new tags from this response for the next turn
-                    new_tags = self.extract_mentions(response)
-                    for t in new_tags:
-                        if t != advisor.tag:
-                            pending_questions[t].append(f"From {advisor.name} in Round {round_idx}: {response[:150]}...")
+                    # If not final round, extract new tags for subsequent turn
+                    if not is_final:
+                        new_tags = self.extract_mentions(response)
+                        for t in new_tags:
+                            if t != advisor.tag:
+                                pending_questions[t].append(f"From {advisor.name} in Round {current_round}: {response[:150]}...")
 
                 except Exception as e:
                     logger.error(f"Error in debate turn for {advisor.name}: {e}")
+
+            # If this was already marked final, stop here
+            if is_final:
+                break
+
+            # If this was round 2, check if consensus reached early
+            if current_round == 2:
+                # Check if there are virtually no pending questions and consensus is reached
+                has_pending = any(len(qs) > 0 for qs in pending_questions.values())
+                if not has_pending and await self._check_if_consensus_reached(problem):
+                    # Consensus achieved in round 2!
+                    break
+
+            current_round += 1
 
         # Step 3: Action Plan Synthesis
         self.final_plan = await self._synthesize_action_plan(problem)
@@ -222,6 +326,7 @@ class BoardOrchestrator:
                     transcript_so_far=transcript_text,
                     all_advisors=self.advisors,
                     targeted_questions=[f"The User asks: {user_message}"],
+                    is_final_round=False,
                 )
                 self._record_message(adv.name, adv.tag, resp, stage="followup_response")
                 responses.append(f"[{adv.name} ({adv.tag})]:\n{resp}")
@@ -236,9 +341,10 @@ class BoardOrchestrator:
         high-impact Plan of Action.
         """
         transcript_text = self.format_transcript()
+        advisors_summary = ", ".join([f"{a.name} ({a.tag})" for a in self.advisors])
 
         prompt = f"""You are the Executive Synthesizer and Board Secretary.
-The Board of Advisors has just completed an in-depth deliberation regarding this problem:
+The Board of Advisors ({advisors_summary}) has just completed their final deliberation regarding this problem:
 "{problem}"
 
 === FULL BOARD DELIBERATION TRANSCRIPT ===
@@ -257,23 +363,20 @@ Your Plan of Action must contain the following markdown sections:
 
 ### 2. Key Insights & Debates
 - The primary consensus points across the board.
-- Where advisors clashed (e.g. Elena vs. Marcus or Aris) and how that trade-off is resolved.
+- Where advisors clashed and how the conflict was resolved in the final round.
 
 ### 3. Immediate Action Plan (Weeks 1 - 2)
 - Specific, high-priority tasks to execute right now.
-- Owners/mindset for each task.
+- Mindset and primary considerations for each task.
 
 ### 4. Milestones & Validation Gates (Days 30, 60, 90)
 - Concrete success criteria and kill-switches / pivot criteria.
 
 ### 5. Risk Matrix & Mitigations
-- Financial / Runway risk mitigation (addressing @Marcus's concerns).
-- Market / Adoption risk mitigation (addressing @Elena's concerns).
-- Technical / Architecture risk mitigation (addressing @Aris's concerns).
-- Governance / Human / Legal safeguards (addressing @Maya's concerns).
+- Key domain risks raised during the debate and their mitigations.
 
 ### 6. Advisor Closing Verdicts
-- A 1-sentence bottom-line takeaway attributed to each advisor (@Elena, @Marcus, @Aris, @Maya).
+- A 1-sentence bottom-line takeaway attributed to each board advisor.
 
 Make the plan actionable, pragmatic, and inspiringly clear."""
 
@@ -283,7 +386,6 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         """Update each advisor's long-term memory with the outcome of this session."""
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         for adv in self.advisors:
-            # Extract this advisor's messages
             adv_msgs = [m.content for m in self.messages if m.tag == adv.tag]
             adv_stance = adv_msgs[0] if adv_msgs else "No initial stance recorded"
             adv.memory.record_decision(
