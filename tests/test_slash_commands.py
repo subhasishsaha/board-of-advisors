@@ -1,15 +1,16 @@
 import asyncio
 import json
-import unittest
+import warnings
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
+import pytest
+from prompt_toolkit.document import Document
 
 from board.config import SESSIONS_DIR, DEFAULT_MODEL, DEFAULT_EFFORT
 from board.orchestrator import BoardOrchestrator
 from board.cli_ui import render_slash_menu
 from board.cli_completer import BoardSlashCompleter, SLASH_COMMANDS
-from prompt_toolkit.document import Document
 from main import (
     parse_args,
     parse_command,
@@ -24,188 +25,236 @@ from main import (
     handle_new_command,
     show_help,
     show_memories,
+    ask_input,
 )
 
-class TestSlashCommands(unittest.TestCase):
+
+class TestSlashCommandParsing:
+    """Tests for CLI command parsing and routing."""
 
     def test_parse_command(self):
         """Verify command parser handles all slash and keyword variants."""
         # Slash trigger
         cmd, arg = parse_command("/")
-        self.assertEqual(cmd, "slash")
+        assert cmd == "slash"
 
         cmd, arg = parse_command("/?")
-        self.assertEqual(cmd, "slash")
+        assert cmd == "slash"
 
         cmd, arg = parse_command("/menu")
-        self.assertEqual(cmd, "slash")
+        assert cmd == "slash"
 
         # Help
         cmd, arg = parse_command("/help")
-        self.assertEqual(cmd, "help")
-        self.assertEqual(arg, "")
+        assert cmd == "help"
+        assert arg == ""
 
         cmd, arg = parse_command("help")
-        self.assertEqual(cmd, "help")
+        assert cmd == "help"
 
         # History
         cmd, arg = parse_command("/history")
-        self.assertEqual(cmd, "history")
-        self.assertEqual(arg, "")
+        assert cmd == "history"
+        assert arg == ""
 
         cmd, arg = parse_command("history")
-        self.assertEqual(cmd, "history")
+        assert cmd == "history"
 
         # New with and without args
         cmd, arg = parse_command("/new")
-        self.assertEqual(cmd, "new")
-        self.assertEqual(arg, "")
+        assert cmd == "new"
+        assert arg == ""
 
         cmd, arg = parse_command("/new Should we expand to Europe?")
-        self.assertEqual(cmd, "new")
-        self.assertEqual(arg, "Should we expand to Europe?")
+        assert cmd == "new"
+        assert arg == "Should we expand to Europe?"
 
         # Cls variants
         cmd, arg = parse_command("/cls")
-        self.assertEqual(cmd, "cls")
-        self.assertEqual(arg, "")
+        assert cmd == "cls"
+        assert arg == ""
 
         cmd, arg = parse_command("cls")
-        self.assertEqual(cmd, "cls")
+        assert cmd == "cls"
 
         cmd, arg = parse_command("/clear")
-        self.assertEqual(cmd, "clear")
+        assert cmd == "clear"
 
         # Delete variants
         cmd, arg = parse_command("/delete 2")
-        self.assertEqual(cmd, "delete")
-        self.assertEqual(arg, "2")
+        assert cmd == "delete"
+        assert arg == "2"
 
         cmd, arg = parse_command("/del 3")
-        self.assertEqual(cmd, "del")
-        self.assertEqual(arg, "3")
+        assert cmd == "del"
+        assert arg == "3"
 
         cmd, arg = parse_command("rm 1")
-        self.assertEqual(cmd, "rm")
-        self.assertEqual(arg, "1")
+        assert cmd == "rm"
+        assert arg == "1"
 
         # Non-commands (actual problem inputs or follow-ups)
         cmd, arg = parse_command("Should we launch our product next Monday?")
-        self.assertIsNone(cmd)
-        self.assertEqual(arg, "Should we launch our product next Monday?")
+        assert cmd is None
+        assert arg == "Should we launch our product next Monday?"
 
         cmd, arg = parse_command("@Elena what are the main patent risks?")
-        self.assertIsNone(cmd)
-        self.assertEqual(arg, "@Elena what are the main patent risks?")
+        assert cmd is None
+        assert arg == "@Elena what are the main patent risks?"
 
         cmd, arg = parse_command("")
-        self.assertIsNone(cmd)
-        self.assertEqual(arg, "")
+        assert cmd is None
+        assert arg == ""
+
+    def test_parse_command_set_max_agents_and_rounds(self):
+        """Verify parser resolves all aliases for set-max-agents and set-round-tables."""
+        # set-max-agents
+        cmd, arg = parse_command("/set-max-agents 6")
+        assert cmd == "set-max-agents"
+        assert arg == "6"
+
+        cmd, arg = parse_command("/set_max_agents 8")
+        assert cmd == "set-max-agents"
+        assert arg == "8"
+
+        cmd, arg = parse_command("/max-agents 5")
+        assert cmd == "set-max-agents"
+        assert arg == "5"
+
+        cmd, arg = parse_command("set-max-agents 7")
+        assert cmd == "set-max-agents"
+        assert arg == "7"
+
+        # set-round-tables
+        cmd, arg = parse_command("/set-round-tables 4")
+        assert cmd == "set-round-tables"
+        assert arg == "4"
+
+        cmd, arg = parse_command("/set_round_tables 2")
+        assert cmd == "set-round-tables"
+        assert arg == "2"
+
+        cmd, arg = parse_command("/round-tables 5")
+        assert cmd == "set-round-tables"
+        assert arg == "5"
+
+        cmd, arg = parse_command("/rounds 3")
+        assert cmd == "set-round-tables"
+        assert arg == "3"
+
+
+class TestCommandChainingPrevention:
+    """Tests for preventing chained slash commands and shell operators."""
 
     def test_prevent_chaining_slash_commands(self):
         """Verify command chaining detection prevents chained commands in all forms."""
         # 1. Chained space-separated commands
         is_chained, err = check_command_chaining("/history /new")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         is_chained, err = check_command_chaining("/new /cls")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         is_chained, err = check_command_chaining("/plan /advisors")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         is_chained, err = check_command_chaining("/delete 1 /plan")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         # 2. Chained keywords without second slash
         is_chained, err = check_command_chaining("/history new")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         is_chained, err = check_command_chaining("/plan advisors")
-        self.assertTrue(is_chained)
-        self.assertIn("Command chaining is not allowed", err)
+        assert is_chained
+        assert "Command chaining is not allowed" in err
 
         # 3. Separator-based chaining (&&, ||, ;, |, &)
         is_chained, err = check_command_chaining("/history && /new")
-        self.assertTrue(is_chained)
-        self.assertIn("&&", err)
+        assert is_chained
+        assert "&&" in err
 
         is_chained, err = check_command_chaining("/plan ; /advisors")
-        self.assertTrue(is_chained)
-        self.assertIn(";", err)
+        assert is_chained
+        assert ";" in err
 
         is_chained, err = check_command_chaining("/new & /cls")
-        self.assertTrue(is_chained)
-        self.assertIn("&", err)
+        assert is_chained
+        assert "&" in err
 
         is_chained, err = check_command_chaining("/history | /plan")
-        self.assertTrue(is_chained)
-        self.assertIn("|", err)
+        assert is_chained
+        assert "|" in err
 
         # 4. Multiple consecutive slashes
         is_chained, err = check_command_chaining("//new")
-        self.assertTrue(is_chained)
-        self.assertIn("Multiple consecutive slashes", err)
+        assert is_chained
+        assert "Multiple consecutive slashes" in err
 
         is_chained, err = check_command_chaining("///help")
-        self.assertTrue(is_chained)
-        self.assertIn("Multiple consecutive slashes", err)
+        assert is_chained
+        assert "Multiple consecutive slashes" in err
 
         # 5. Concatenated slash commands
         is_chained, err = check_command_chaining("/history/new")
-        self.assertTrue(is_chained)
-        self.assertIn("Chained slash commands detected", err)
+        assert is_chained
+        assert "Chained slash commands detected" in err
 
         # 6. Valid non-chained commands must pass through
         is_chained, err = check_command_chaining("/")
-        self.assertFalse(is_chained)
-        self.assertIsNone(err)
+        assert not is_chained
+        assert err is None
 
         is_chained, err = check_command_chaining("/new Should we launch next month?")
-        self.assertFalse(is_chained)
-        self.assertIsNone(err)
+        assert not is_chained
+        assert err is None
 
         is_chained, err = check_command_chaining("/new We need 24/7 technical support")
-        self.assertFalse(is_chained)
-        self.assertIsNone(err)
+        assert not is_chained
+        assert err is None
 
         is_chained, err = check_command_chaining("Should we launch on 2026/11/15 or wait?")
-        self.assertFalse(is_chained)
-        self.assertIsNone(err)
+        assert not is_chained
+        assert err is None
+
+
+class TestBoardSlashCompleter:
+    """Tests for prompt_toolkit live autocompletion."""
 
     def test_board_slash_completer_shows_options_on_slash(self):
-        """Verify BoardSlashCompleter instantly yields all options when '/' is typed (Claude/Antigravity style)."""
+        """Verify BoardSlashCompleter instantly yields all options when '/' is typed."""
         completer = BoardSlashCompleter()
         doc = Document("/")
         completions = list(completer.get_completions(doc, None))
 
-        # Must yield all 9 slash commands
-        self.assertEqual(len(completions), len(SLASH_COMMANDS))
+        assert len(completions) == len(SLASH_COMMANDS)
         comp_texts = [c.text for c in completions]
-        self.assertIn("/new", comp_texts)
-        self.assertIn("/history", comp_texts)
-        self.assertIn("/delete", comp_texts)
-        self.assertIn("/cls", comp_texts)
-        self.assertIn("/advisors", comp_texts)
-        self.assertIn("/plan", comp_texts)
-        self.assertIn("/memory", comp_texts)
-        self.assertIn("/help", comp_texts)
-        self.assertIn("/exit", comp_texts)
+        assert "/new" in comp_texts
+        assert "/history" in comp_texts
+        assert "/delete" in comp_texts
+        assert "/cls" in comp_texts
+        assert "/set-max-agents" in comp_texts
+        assert "/set-round-tables" in comp_texts
+        assert "/advisors" in comp_texts
+        assert "/plan" in comp_texts
+        assert "/memory" in comp_texts
+        assert "/help" in comp_texts
+        assert "/exit" in comp_texts
 
         # Verify descriptions (display_meta) are populated
         for c in completions:
-            self.assertTrue(len(str(c.display_meta)) > 5)
+            assert len(str(c.display_meta)) > 5
 
         # Verify real-time prefix filtering: typing '/h' filters down to '/history' and '/help'
         doc_h = Document("/h")
         comps_h = list(completer.get_completions(doc_h, None))
-        self.assertEqual(len(comps_h), 2)
-        self.assertSetEqual({c.text for c in comps_h}, {"/history", "/help"})
+        assert len(comps_h) == 2
+        assert {c.text for c in comps_h} == {"/history", "/help"}
 
     def test_board_slash_completer_prevents_chaining(self):
         """Verify BoardSlashCompleter suppresses completions if space or chained command is present."""
@@ -214,12 +263,12 @@ class TestSlashCommands(unittest.TestCase):
         # Once a space is typed (e.g. '/new '), no slash commands should be suggested
         doc_spaced = Document("/new ")
         comps_spaced = list(completer.get_completions(doc_spaced, None))
-        self.assertEqual(len(comps_spaced), 0)
+        assert len(comps_spaced) == 0
 
         # Chained attempt in prompt
         doc_chained = Document("/new /")
         comps_chained = list(completer.get_completions(doc_chained, None))
-        self.assertEqual(len(comps_chained), 0)
+        assert len(comps_chained) == 0
 
     def test_board_slash_completer_advisor_mentions(self):
         """Verify BoardSlashCompleter yields advisor @tag completions when typing '@'."""
@@ -230,43 +279,168 @@ class TestSlashCommands(unittest.TestCase):
         doc_at = Document("@")
         comps_at = list(completer.get_completions(doc_at, None))
 
-        self.assertGreater(len(comps_at), 0)
+        assert len(comps_at) > 0
         first_comp = comps_at[0]
-        self.assertTrue(first_comp.text.startswith("@"))
+        assert first_comp.text.startswith("@")
+
+    def test_cli_completer_includes_set_commands(self):
+        """Verify completer yields /set-max-agents and /set-round-tables."""
+        completer = BoardSlashCompleter()
+        doc = Document("/set")
+        completions = [c.text for c in completer.get_completions(doc, None)]
+        assert "/set-max-agents" in completions
+        assert "/set-round-tables" in completions
+
+
+class TestCLIArgumentsAndConfiguration:
+    """Tests for CLI arguments, model/effort propagation, and settings."""
 
     def test_parse_args_defaults(self):
         """Verify parse_args defaults to DEFAULT_MODEL and DEFAULT_EFFORT."""
         with patch("sys.argv", ["main.py"]):
             args = parse_args()
-            self.assertEqual(args.model, DEFAULT_MODEL)
-            self.assertEqual(args.effort, DEFAULT_EFFORT)
+            assert args.model == DEFAULT_MODEL
+            assert args.effort == DEFAULT_EFFORT
 
     def test_parse_args_custom(self):
         """Verify parse_args parses --model and --effort flags and short -m / -e."""
         with patch("sys.argv", ["main.py", "--model", "gemini-2.5-pro", "--effort", "high"]):
             args = parse_args()
-            self.assertEqual(args.model, "gemini-2.5-pro")
-            self.assertEqual(args.effort, "high")
+            assert args.model == "gemini-2.5-pro"
+            assert args.effort == "high"
 
         with patch("sys.argv", ["main.py", "-m", "custom-flash", "-e", "low"]):
             args = parse_args()
-            self.assertEqual(args.model, "custom-flash")
-            self.assertEqual(args.effort, "low")
+            assert args.model == "custom-flash"
+            assert args.effort == "low"
 
     def test_orchestrator_custom_model_and_effort(self):
         """Verify BoardOrchestrator propagates custom model and effort to invokers and advisors."""
         orchestrator = BoardOrchestrator(model="gemini-2.5-pro", effort="high")
-        self.assertEqual(orchestrator.model, "gemini-2.5-pro")
-        self.assertEqual(orchestrator.effort, "high")
-        self.assertEqual(orchestrator.synthesizer_invoker.model, "gemini-2.5-pro")
-        self.assertEqual(orchestrator.synthesizer_invoker.effort, "high")
+        assert orchestrator.model == "gemini-2.5-pro"
+        assert orchestrator.effort == "high"
+        assert orchestrator.synthesizer_invoker.model == "gemini-2.5-pro"
+        assert orchestrator.synthesizer_invoker.effort == "high"
 
         orchestrator._load_predefined_advisors()
         for adv in orchestrator.advisors:
-            self.assertEqual(adv.model, "gemini-2.5-pro")
-            self.assertEqual(adv.effort, "high")
-            self.assertEqual(adv.invoker.model, "gemini-2.5-pro")
-            self.assertEqual(adv.invoker.effort, "high")
+            assert adv.model == "gemini-2.5-pro"
+            assert adv.effort == "high"
+            assert adv.invoker.model == "gemini-2.5-pro"
+            assert adv.invoker.effort == "high"
+
+    def test_validate_integer_arg(self):
+        """Verify strict integer validation: only positive integers pass, everything else is rejected."""
+        # Valid positive integers
+        val, err = validate_integer_arg("5", "set-max-agents")
+        assert val == 5
+        assert err is None
+
+        val, err = validate_integer_arg("  10  ", "set-max-agents")
+        assert val == 10
+        assert err is None
+
+        # Empty / missing value
+        val, err = validate_integer_arg("", "set-max-agents")
+        assert val is None
+        assert "Missing value" in err
+
+        # Floats
+        val, err = validate_integer_arg("5.5", "set-max-agents")
+        assert val is None
+        assert "must be an integer, nothing else" in err
+
+        # Non-numeric text
+        val, err = validate_integer_arg("five", "set-max-agents")
+        assert val is None
+        assert "must be an integer, nothing else" in err
+
+        # Alphanumeric / extra tokens
+        val, err = validate_integer_arg("5 advisors", "set-max-agents")
+        assert val is None
+        assert "must be an integer, nothing else" in err
+
+        val, err = validate_integer_arg("5abc", "set-max-agents")
+        assert val is None
+        assert "must be an integer, nothing else" in err
+
+        # Zero or negative
+        val, err = validate_integer_arg("0", "set-max-agents", min_val=1)
+        assert val is None
+        assert "at least 1" in err
+
+        val, err = validate_integer_arg("-3", "set-max-agents", min_val=1)
+        assert val is None
+        assert "at least 1" in err
+
+        # Exceeding max_val
+        val, err = validate_integer_arg("25", "set-max-agents", min_val=1, max_val=20)
+        assert val is None
+        assert "cannot exceed 20" in err
+
+    def test_handle_set_max_agents_command(self):
+        """Verify setting max dynamic advisors on current thread and pruning active board if necessary."""
+        orchestrator = BoardOrchestrator()
+        assert orchestrator.max_agents == 10
+
+        # Successfully set max_agents
+        res = handle_set_max_agents_command(orchestrator, "6")
+        assert res
+        assert orchestrator.max_agents == 6
+
+        # Successfully prune active advisors if new max_agents is lower
+        orchestrator._load_predefined_advisors()
+        assert len(orchestrator.advisors) > 2
+        res = handle_set_max_agents_command(orchestrator, "2")
+        assert res
+        assert orchestrator.max_agents == 2
+        assert len(orchestrator.advisors) == 2
+
+        # Rejects non-integers without modifying max_agents
+        res = handle_set_max_agents_command(orchestrator, "six")
+        assert not res
+        assert orchestrator.max_agents == 2
+
+        res = handle_set_max_agents_command(orchestrator, "2.5")
+        assert not res
+        assert orchestrator.max_agents == 2
+
+    def test_handle_set_round_tables_command(self):
+        """Verify setting deliberation rounds on current thread."""
+        orchestrator = BoardOrchestrator()
+        assert orchestrator.max_rounds == 3
+
+        # Successfully set max_rounds
+        res = handle_set_round_tables_command(orchestrator, "5")
+        assert res
+        assert orchestrator.max_rounds == 5
+
+        # Rejects non-integers without modifying max_rounds
+        res = handle_set_round_tables_command(orchestrator, "invalid")
+        assert not res
+        assert orchestrator.max_rounds == 5
+
+        res = handle_set_round_tables_command(orchestrator, "0")
+        assert not res
+        assert orchestrator.max_rounds == 5
+
+    def test_new_thread_resets_max_agents_and_rounds_to_defaults(self):
+        """Verify that per-thread settings (max_agents, max_rounds) reset to defaults for a new thread."""
+        orchestrator = BoardOrchestrator()
+        orchestrator.max_agents = 4
+        orchestrator.max_rounds = 5
+
+        old_session_id = orchestrator.session_id
+        new_session_id = orchestrator.reset_session()
+
+        assert new_session_id != old_session_id
+        # Must reset to default value of 10 and 3
+        assert orchestrator.max_agents == 10
+        assert orchestrator.max_rounds == 3
+
+
+class TestSessionPersistence:
+    """Tests for session JSON persistence, listing, and lifecycle."""
 
     def test_session_creation_loading_and_deletion(self):
         """Verify session JSON persistence, listing, loading, and deletion."""
@@ -311,33 +485,91 @@ class TestSlashCommands(unittest.TestCase):
         with open(test_file, "w", encoding="utf-8") as f:
             json.dump(dummy_data, f, indent=2)
 
-        self.assertTrue(test_file.exists())
+        assert test_file.exists()
 
         # Check listing
         sessions = orchestrator.list_saved_sessions()
         session_ids = [s["session_id"] for s in sessions]
-        self.assertIn(test_session_id, session_ids)
+        assert test_session_id in session_ids
 
         # Check loading
         loaded = orchestrator.load_session_by_id(test_session_id)
-        self.assertTrue(loaded)
-        self.assertEqual(orchestrator.current_problem, "Should we pivot from B2C to B2B SaaS?")
-        self.assertEqual(len(orchestrator.advisors), 1)
-        self.assertEqual(orchestrator.advisors[0].name, "Marcus Vance")
-        self.assertEqual(len(orchestrator.messages), 2)
-        self.assertEqual(orchestrator.final_plan, "Pivot conditionally within 90 days.")
+        assert loaded
+        assert orchestrator.current_problem == "Should we pivot from B2C to B2B SaaS?"
+        assert len(orchestrator.advisors) == 1
+        assert orchestrator.advisors[0].name == "Marcus Vance"
+        assert len(orchestrator.messages) == 2
+        assert orchestrator.final_plan == "Pivot conditionally within 90 days."
 
         # Check deletion
         deleted = orchestrator.delete_session_by_id(test_session_id)
-        self.assertTrue(deleted)
-        self.assertFalse(test_file.exists())
+        assert deleted
+        assert not test_file.exists()
 
         sessions_after = orchestrator.list_saved_sessions()
         ids_after = [s["session_id"] for s in sessions_after]
-        self.assertNotIn(test_session_id, ids_after)
+        assert test_session_id not in ids_after
+
+    def test_orchestrator_clear_session_preserves_session_id(self):
+        """Verify clear_session clears advisors, problem, messages, and plan in the SAME session without changing session_id."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        orchestrator.current_problem = "Existing strategic dilemma"
+        orchestrator.final_plan = "Existing action plan"
+        original_session_id = orchestrator.session_id
+
+        returned_id = orchestrator.clear_session()
+        assert returned_id == original_session_id
+        assert orchestrator.session_id == original_session_id
+        assert orchestrator.current_problem == ""
+        assert orchestrator.final_plan == ""
+        assert orchestrator.advisors == []
+        assert orchestrator.messages == []
+
+    def test_handle_cls_command(self):
+        """Verify /cls command clears session state and resets slate without generating a new session."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        orchestrator.current_problem = "Some dilemma"
+        original_id = orchestrator.session_id
+
+        with patch("rich.console.Console.clear"):
+            handle_cls_command(orchestrator)
+
+        assert orchestrator.session_id == original_id
+        assert orchestrator.current_problem == ""
+        assert orchestrator.advisors == []
+        assert orchestrator.final_plan == ""
+
+    async def test_session_model_and_effort_persistence(self):
+        """Verify session JSON saves and restores custom model and effort settings."""
+        orchestrator = BoardOrchestrator(model="custom-exp-model", effort="high")
+        test_session_id = f"test_meta_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        test_file = SESSIONS_DIR / f"session_{test_session_id}.json"
+
+        orchestrator.session_id = test_session_id
+        orchestrator._load_predefined_advisors()
+        orchestrator._save_session_memories("Test dilemma", "Test plan")
+
+        assert test_file.exists()
+        with open(test_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data.get("model") == "custom-exp-model"
+        assert data.get("effort") == "high"
+
+        # Now load with a new orchestrator and verify model/effort are restored
+        new_orchestrator = BoardOrchestrator()
+        new_orchestrator.load_session_by_id(test_session_id)
+        assert new_orchestrator.model == "custom-exp-model"
+        assert new_orchestrator.effort == "high"
+        assert new_orchestrator.synthesizer_invoker.model == "custom-exp-model"
+        assert new_orchestrator.synthesizer_invoker.effort == "high"
+
+        test_file.unlink(missing_ok=True)
 
 
-class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
+class TestAsyncCommandFlows:
+    """Tests for asynchronous user command interactions and deliberation."""
 
     async def test_handle_slash_trigger_shows_options_menu(self):
         """Verify giving '/' displays the options menu and executes selected option."""
@@ -349,7 +581,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         with patch("rich.prompt.Prompt.ask", return_value="6"), \
              patch("main.render_plan") as mock_render_plan:
             res = await handle_slash_trigger(orchestrator)
-            self.assertTrue(res)
+            assert res
             mock_render_plan.assert_called_once_with("Mock Action Plan")
 
     async def test_handle_slash_trigger_numeric_help(self):
@@ -358,7 +590,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         with patch("rich.prompt.Prompt.ask", return_value="8"), \
              patch("main.show_help") as mock_help:
             res = await handle_slash_trigger(orchestrator)
-            self.assertTrue(res)
+            assert res
             mock_help.assert_called_once()
 
     async def test_handle_slash_trigger_cancel(self):
@@ -366,14 +598,14 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         orchestrator = BoardOrchestrator()
         with patch("rich.prompt.Prompt.ask", return_value=""):
             res = await handle_slash_trigger(orchestrator)
-            self.assertFalse(res)
+            assert not res
 
     async def test_handle_slash_trigger_chained_input_rejected(self):
         """Verify chained input in slash options prompt is blocked."""
         orchestrator = BoardOrchestrator()
         with patch("rich.prompt.Prompt.ask", return_value="/new /history"):
             res = await handle_slash_trigger(orchestrator)
-            self.assertFalse(res)
+            assert not res
 
     async def test_handle_history_command_delete_flow(self):
         """Simulate user navigating /history and deleting a session with 'd #'."""
@@ -398,14 +630,14 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
                 target_idx = i
                 break
 
-        self.assertIsNotNone(target_idx)
+        assert target_idx is not None
 
         prompt_inputs = [f"d {target_idx}", "y", ""]
         with patch("rich.prompt.Prompt.ask", side_effect=prompt_inputs):
             res = await handle_history_command(orchestrator)
-            self.assertFalse(res)
+            assert not res
 
-        self.assertFalse(test_file.exists())
+        assert not test_file.exists()
 
     async def test_handle_history_command_load_flow(self):
         """Simulate user selecting a session to load."""
@@ -430,13 +662,13 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
                 target_idx = i
                 break
 
-        self.assertIsNotNone(target_idx)
+        assert target_idx is not None
 
         with patch("rich.prompt.Prompt.ask", return_value=str(target_idx)):
             res = await handle_history_command(orchestrator)
-            self.assertTrue(res)
-            self.assertEqual(orchestrator.session_id, test_session_id)
-            self.assertEqual(orchestrator.current_problem, "Test Problem to Load")
+            assert res
+            assert orchestrator.session_id == test_session_id
+            assert orchestrator.current_problem == "Test Problem to Load"
 
         test_file.unlink(missing_ok=True)
 
@@ -465,38 +697,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         with patch("rich.prompt.Prompt.ask", return_value="y"):
             await handle_delete_command(orchestrator, str(target_idx))
 
-        self.assertFalse(test_file.exists())
-
-    def test_orchestrator_clear_session_preserves_session_id(self):
-        """Verify clear_session clears advisors, problem, messages, and plan in the SAME session without changing session_id."""
-        orchestrator = BoardOrchestrator()
-        orchestrator._load_predefined_advisors()
-        orchestrator.current_problem = "Existing strategic dilemma"
-        orchestrator.final_plan = "Existing action plan"
-        original_session_id = orchestrator.session_id
-
-        returned_id = orchestrator.clear_session()
-        self.assertEqual(returned_id, original_session_id)
-        self.assertEqual(orchestrator.session_id, original_session_id)
-        self.assertEqual(orchestrator.current_problem, "")
-        self.assertEqual(orchestrator.final_plan, "")
-        self.assertEqual(orchestrator.advisors, [])
-        self.assertEqual(orchestrator.messages, [])
-
-    def test_handle_cls_command(self):
-        """Verify /cls command clears session state and resets slate without generating a new session."""
-        orchestrator = BoardOrchestrator()
-        orchestrator._load_predefined_advisors()
-        orchestrator.current_problem = "Some dilemma"
-        original_id = orchestrator.session_id
-
-        with patch("rich.console.Console.clear"):
-            handle_cls_command(orchestrator)
-
-        self.assertEqual(orchestrator.session_id, original_id)
-        self.assertEqual(orchestrator.current_problem, "")
-        self.assertEqual(orchestrator.advisors, [])
-        self.assertEqual(orchestrator.final_plan, "")
+        assert not test_file.exists()
 
     async def test_handle_new_command_resets_session(self):
         """Verify /new resets session and triggers fresh deliberation."""
@@ -509,46 +710,18 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             await handle_new_command(orchestrator, "Brand new startup dilemma")
             mock_run.assert_awaited_once_with(orchestrator, "Brand new startup dilemma")
 
-        self.assertNotEqual(orchestrator.session_id, old_session_id)
-        self.assertEqual(orchestrator.current_problem, "")
-        self.assertEqual(orchestrator.advisors, [])
+        assert orchestrator.session_id != old_session_id
+        assert orchestrator.current_problem == ""
+        assert orchestrator.advisors == []
 
     async def test_ask_input_async_execution_no_warnings(self):
         """Verify ask_input executes cleanly as an awaited coroutine in active asyncio loop without RuntimeWarning."""
-        import warnings
-        from main import ask_input
         with warnings.catch_warnings(record=True) as w, \
              patch("rich.prompt.Prompt.ask", return_value="test input"):
             res = await ask_input("Prompt Rich", "<b>Prompt HTML</b>")
-            self.assertEqual(res, "test input")
+            assert res == "test input"
             runtime_warnings = [item for item in w if issubclass(item.category, RuntimeWarning)]
-            self.assertEqual(len(runtime_warnings), 0)
-
-    async def test_session_model_and_effort_persistence(self):
-        """Verify session JSON saves and restores custom model and effort settings."""
-        orchestrator = BoardOrchestrator(model="custom-exp-model", effort="high")
-        test_session_id = f"test_meta_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-        test_file = SESSIONS_DIR / f"session_{test_session_id}.json"
-
-        orchestrator.session_id = test_session_id
-        orchestrator._load_predefined_advisors()
-        orchestrator._save_session_memories("Test dilemma", "Test plan")
-
-        self.assertTrue(test_file.exists())
-        with open(test_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data.get("model"), "custom-exp-model")
-        self.assertEqual(data.get("effort"), "high")
-
-        # Now load with a new orchestrator and verify model/effort are restored
-        new_orchestrator = BoardOrchestrator()
-        new_orchestrator.load_session_by_id(test_session_id)
-        self.assertEqual(new_orchestrator.model, "custom-exp-model")
-        self.assertEqual(new_orchestrator.effort, "high")
-        self.assertEqual(new_orchestrator.synthesizer_invoker.model, "custom-exp-model")
-        self.assertEqual(new_orchestrator.synthesizer_invoker.effort, "high")
-
-        test_file.unlink(missing_ok=True)
+            assert len(runtime_warnings) == 0
 
     async def test_evaluate_user_input_need_no_indicators_skips_llm(self):
         """Verify that plain statements without questions or user/constraint indicators skip LLM reading."""
@@ -560,7 +733,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
             result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
             mock_invoke.assert_not_called()
-            self.assertIsNone(result)
+            assert result is None
 
     async def test_evaluate_user_input_need_rejects_casual_user_mention(self):
         """Verify orchestrator reads and rejects casual/historical mentions of @User without interrupting."""
@@ -578,7 +751,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             mock_invoke.return_value = llm_reply
             result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
             mock_invoke.assert_called_once()
-            self.assertIsNone(result)
+            assert result is None
 
     async def test_evaluate_user_input_need_rejects_rhetorical_question(self):
         """Verify orchestrator reads and rejects rhetorical debate questions."""
@@ -596,7 +769,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             mock_invoke.return_value = llm_reply
             result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
             mock_invoke.assert_called_once()
-            self.assertIsNone(result)
+            assert result is None
 
     async def test_evaluate_user_input_need_approves_genuine_user_input_request(self):
         """Verify orchestrator reads scenario and approves genuine missing fact inquiry."""
@@ -614,7 +787,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             mock_invoke.return_value = llm_reply
             result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
             mock_invoke.assert_called_once()
-            self.assertEqual(result, "What is your net monthly burn rate?")
+            assert result == "What is your net monthly burn rate?"
 
     async def test_evaluate_user_input_need_approves_without_explicit_user_keyword(self):
         """Verify orchestrator reads scenario and approves critical question even without '@User' tag."""
@@ -632,7 +805,7 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             mock_invoke.return_value = llm_reply
             result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
             mock_invoke.assert_called_once()
-            self.assertEqual(result, "What is your personal timeline and preferred horizon for an exit?")
+            assert result == "What is your personal timeline and preferred horizon for an exit?"
 
     async def test_evaluate_user_input_need_fallback_on_invoker_failure(self):
         """Verify safe fallback when invoker raises an unexpected error."""
@@ -644,14 +817,14 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         statement_casual = "As @User said earlier, we should proceed carefully."
         with patch.object(orchestrator.synthesizer_invoker, "invoke_async", side_effect=RuntimeError("CLI failure")):
             res_casual = await orchestrator.evaluate_user_input_need(advisor, statement_casual, "Test dilemma")
-            self.assertIsNone(res_casual)
+            assert res_casual is None
 
         # Case B: Explicit @User question with question mark -> falls back to question extraction
         statement_direct = "@User, can you confirm if the budget is under $50k?"
         with patch.object(orchestrator.synthesizer_invoker, "invoke_async", side_effect=RuntimeError("CLI failure")):
             res_direct = await orchestrator.evaluate_user_input_need(advisor, statement_direct, "Test dilemma")
-            self.assertIsNotNone(res_direct)
-            self.assertIn("@User", res_direct)
+            assert res_direct is not None
+            assert "@User" in res_direct
 
     async def test_deliberation_flow_user_input_validated_by_chair(self):
         """Verify deliberation flow suspends only when orchestrator reads and validates user input need."""
@@ -674,9 +847,6 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         adv0_resp = "As @User said, our focus is B2B. @David, do you agree?"
         adv1_resp = "I need clarity: what is your max burn rate? @User please clarify."
 
-        async def mock_initial_assessment(problem, all_advisors, user_notes=""):
-            return adv0_resp
-
         orchestrator.advisors[0].generate_initial_assessment = AsyncMock(return_value=adv0_resp)
         orchestrator.advisors[1].generate_initial_assessment = AsyncMock(return_value=adv1_resp)
         orchestrator.advisors[0].generate_discussion_turn = AsyncMock(return_value="Final conclusion.")
@@ -693,167 +863,10 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         orchestrator._save_session_memories = lambda p, plan: None
 
         plan = await orchestrator.run_deliberation("Test problem")
-        self.assertEqual(plan, "Action Plan")
-        self.assertTrue(user_input_called)
+        assert plan == "Action Plan"
+        assert user_input_called
 
         # Check recorded messages to verify user input was incorporated
         user_msgs = [m for m in orchestrator.messages if m.sender == "USER" and m.stage == "round_1_user_input"]
-        self.assertEqual(len(user_msgs), 1)
-        self.assertIn("10k/month", user_msgs[0].content)
-
-    def test_validate_integer_arg(self):
-        """Verify strict integer validation: only positive integers pass, everything else is rejected."""
-        # Valid positive integers
-        val, err = validate_integer_arg("5", "set-max-agents")
-        self.assertEqual(val, 5)
-        self.assertIsNone(err)
-
-        val, err = validate_integer_arg("  10  ", "set-max-agents")
-        self.assertEqual(val, 10)
-        self.assertIsNone(err)
-
-        # Empty / missing value
-        val, err = validate_integer_arg("", "set-max-agents")
-        self.assertIsNone(val)
-        self.assertIn("Missing value", err)
-
-        # Floats
-        val, err = validate_integer_arg("5.5", "set-max-agents")
-        self.assertIsNone(val)
-        self.assertIn("must be an integer, nothing else", err)
-
-        # Non-numeric text
-        val, err = validate_integer_arg("five", "set-max-agents")
-        self.assertIsNone(val)
-        self.assertIn("must be an integer, nothing else", err)
-
-        # Alphanumeric / extra tokens
-        val, err = validate_integer_arg("5 advisors", "set-max-agents")
-        self.assertIsNone(val)
-        self.assertIn("must be an integer, nothing else", err)
-
-        val, err = validate_integer_arg("5abc", "set-max-agents")
-        self.assertIsNone(val)
-        self.assertIn("must be an integer, nothing else", err)
-
-        # Zero or negative
-        val, err = validate_integer_arg("0", "set-max-agents", min_val=1)
-        self.assertIsNone(val)
-        self.assertIn("at least 1", err)
-
-        val, err = validate_integer_arg("-3", "set-max-agents", min_val=1)
-        self.assertIsNone(val)
-        self.assertIn("at least 1", err)
-
-        # Exceeding max_val
-        val, err = validate_integer_arg("25", "set-max-agents", min_val=1, max_val=20)
-        self.assertIsNone(val)
-        self.assertIn("cannot exceed 20", err)
-
-    def test_handle_set_max_agents_command(self):
-        """Verify setting max dynamic advisors on current thread and pruning active board if necessary."""
-        orchestrator = BoardOrchestrator()
-        self.assertEqual(orchestrator.max_agents, 10)
-
-        # Successfully set max_agents
-        res = handle_set_max_agents_command(orchestrator, "6")
-        self.assertTrue(res)
-        self.assertEqual(orchestrator.max_agents, 6)
-
-        # Successfully prune active advisors if new max_agents is lower
-        orchestrator._load_predefined_advisors()
-        self.assertGreater(len(orchestrator.advisors), 2)
-        res = handle_set_max_agents_command(orchestrator, "2")
-        self.assertTrue(res)
-        self.assertEqual(orchestrator.max_agents, 2)
-        self.assertEqual(len(orchestrator.advisors), 2)
-
-        # Rejects non-integers without modifying max_agents
-        res = handle_set_max_agents_command(orchestrator, "six")
-        self.assertFalse(res)
-        self.assertEqual(orchestrator.max_agents, 2)
-
-        res = handle_set_max_agents_command(orchestrator, "2.5")
-        self.assertFalse(res)
-        self.assertEqual(orchestrator.max_agents, 2)
-
-    def test_handle_set_round_tables_command(self):
-        """Verify setting deliberation rounds on current thread."""
-        orchestrator = BoardOrchestrator()
-        self.assertEqual(orchestrator.max_rounds, 3)
-
-        # Successfully set max_rounds
-        res = handle_set_round_tables_command(orchestrator, "5")
-        self.assertTrue(res)
-        self.assertEqual(orchestrator.max_rounds, 5)
-
-        # Rejects non-integers without modifying max_rounds
-        res = handle_set_round_tables_command(orchestrator, "invalid")
-        self.assertFalse(res)
-        self.assertEqual(orchestrator.max_rounds, 5)
-
-        res = handle_set_round_tables_command(orchestrator, "0")
-        self.assertFalse(res)
-        self.assertEqual(orchestrator.max_rounds, 5)
-
-    def test_new_thread_resets_max_agents_and_rounds_to_defaults(self):
-        """Verify that per-thread settings (max_agents, max_rounds) reset to defaults for a new thread."""
-        orchestrator = BoardOrchestrator()
-        orchestrator.max_agents = 4
-        orchestrator.max_rounds = 5
-
-        old_session_id = orchestrator.session_id
-        new_session_id = orchestrator.reset_session()
-
-        self.assertNotEqual(new_session_id, old_session_id)
-        # Must reset to default value of 10 and 3
-        self.assertEqual(orchestrator.max_agents, 10)
-        self.assertEqual(orchestrator.max_rounds, 3)
-
-    def test_parse_command_set_max_agents_and_rounds(self):
-        """Verify parser resolves all aliases for set-max-agents and set-round-tables."""
-        # set-max-agents
-        cmd, arg = parse_command("/set-max-agents 6")
-        self.assertEqual(cmd, "set-max-agents")
-        self.assertEqual(arg, "6")
-
-        cmd, arg = parse_command("/set_max_agents 8")
-        self.assertEqual(cmd, "set-max-agents")
-        self.assertEqual(arg, "8")
-
-        cmd, arg = parse_command("/max-agents 5")
-        self.assertEqual(cmd, "set-max-agents")
-        self.assertEqual(arg, "5")
-
-        cmd, arg = parse_command("set-max-agents 7")
-        self.assertEqual(cmd, "set-max-agents")
-        self.assertEqual(arg, "7")
-
-        # set-round-tables
-        cmd, arg = parse_command("/set-round-tables 4")
-        self.assertEqual(cmd, "set-round-tables")
-        self.assertEqual(arg, "4")
-
-        cmd, arg = parse_command("/set_round_tables 2")
-        self.assertEqual(cmd, "set-round-tables")
-        self.assertEqual(arg, "2")
-
-        cmd, arg = parse_command("/round-tables 5")
-        self.assertEqual(cmd, "set-round-tables")
-        self.assertEqual(arg, "5")
-
-        cmd, arg = parse_command("/rounds 3")
-        self.assertEqual(cmd, "set-round-tables")
-        self.assertEqual(arg, "3")
-
-    def test_cli_completer_includes_set_commands(self):
-        """Verify completer yields /set-max-agents and /set-round-tables."""
-        completer = BoardSlashCompleter()
-        doc = Document("/set")
-        completions = [c.text for c in completer.get_completions(doc, None)]
-        self.assertIn("/set-max-agents", completions)
-        self.assertIn("/set-round-tables", completions)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(user_msgs) == 1
+        assert "10k/month" in user_msgs[0].content
