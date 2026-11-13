@@ -58,6 +58,7 @@ class BoardOrchestrator:
         self.messages: List[BoardMessage] = []
         self.current_problem: str = ""
         self.final_plan: str = ""
+        self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.synthesizer_invoker = AntigravityInvoker()
 
@@ -438,8 +439,7 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         return await self.synthesizer_invoker.invoke_async(prompt)
 
     def _save_session_memories(self, problem: str, plan: str) -> None:
-        """Update each advisor's long-term memory with the outcome of this session."""
-        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        """Update each advisor's long-term memory and save session transcript with full advisor metadata."""
         for adv in self.advisors:
             adv_msgs = [m.content for m in self.messages if m.tag == adv.tag]
             adv_stance = adv_msgs[0] if adv_msgs else "No initial stance recorded"
@@ -451,16 +451,244 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             adv.memory.clear_working_notes()
 
         # Save session transcript to storage/sessions/
-        session_file = SESSIONS_DIR / f"session_{session_id}.json"
+        session_file = SESSIONS_DIR / f"session_{self.session_id}.json"
         try:
             with open(session_file, "w", encoding="utf-8") as f:
                 import json
                 json.dump({
-                    "session_id": session_id,
+                    "session_id": self.session_id,
                     "timestamp": datetime.now().isoformat(),
                     "problem": problem,
+                    "advisors": [
+                        {
+                            "id": a.id,
+                            "name": a.name,
+                            "tag": a.tag,
+                            "role": a.role,
+                            "avatar": a.avatar,
+                            "color": a.color,
+                            "persona": a.persona,
+                            "bio": a.bio,
+                            "core_beliefs": getattr(a, "core_beliefs", []),
+                        }
+                        for a in self.advisors
+                    ],
                     "messages": [m.to_dict() for m in self.messages],
                     "final_plan": plan,
                 }, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Failed to save session log: {e}")
+
+    def reset_session(self) -> str:
+        """Start a completely new session, resetting advisors, messages, and plan."""
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.advisors = []
+        self.advisors_by_tag = {}
+        self.advisors_by_id = {}
+        self.messages = []
+        self.current_problem = ""
+        self.final_plan = ""
+        return self.session_id
+
+    async def suspend_and_pivot(self, new_problem: str, user_context: str = "") -> str:
+        """
+        Suspends the current deliberation in the SAME session without starting a new session.
+        The current board remains assembled with all its context, and pivots to deliberate
+        on the new problem or sub-task.
+        """
+        self._record_message(
+            "SYSTEM",
+            "@System",
+            f"⏸️ Deliberation suspended on previous problem.\nPivoting in current session to new challenge:\n\"{new_problem}\"",
+            stage="session_suspended_pivot",
+        )
+        self.current_problem = new_problem
+
+        # Round 1 (Opening on new problem)
+        async def fetch_pivot_initial(advisor: Advisor):
+            response = await advisor.generate_initial_assessment(
+                problem=new_problem,
+                all_advisors=self.advisors,
+                user_notes=f"Previous session debate is in your transcript. Pivoting focus: {user_context}" if user_context else "Pivoting focus from previous session discussion.",
+            )
+            return advisor, response
+
+        initial_tasks = [fetch_pivot_initial(a) for a in self.advisors]
+        initial_results = await asyncio.gather(*initial_tasks, return_exceptions=True)
+
+        pending_questions: Dict[str, List[str]] = {a.tag: [] for a in self.advisors}
+        for res in initial_results:
+            if isinstance(res, Exception):
+                logger.error(f"Error in pivot assessment: {res}")
+                continue
+            advisor, response = res
+            self._record_message(advisor.name, advisor.tag, response, stage="pivot_round_1_opening")
+
+            tags = self.extract_mentions(response)
+            for t in tags:
+                pending_questions[t].append(f"From {advisor.name} ({advisor.tag}): {response[:150]}...")
+
+        # If any opening assessment asked @User
+        for res in initial_results:
+            if isinstance(res, Exception):
+                continue
+            advisor, response = res
+            user_q = self.check_user_mention(response)
+            if user_q and self.user_input_callback:
+                user_ans = await self._request_user_input(advisor, user_q)
+                if user_ans and user_ans.strip():
+                    self._record_message("USER", "@User", user_ans.strip(), stage="pivot_round_1_user_input")
+                    advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
+
+        # Discussion Rounds (Up to MAX_ROUNDS = 3)
+        current_round = 2
+        while current_round <= self.max_rounds:
+            is_final = (current_round == self.max_rounds)
+            if current_round == 3:
+                is_final = True
+
+            stage_name = f"pivot_round_{current_round}_final" if is_final else f"pivot_round_{current_round}_debate"
+
+            speaking_order = sorted(
+                self.advisors,
+                key=lambda a: len(pending_questions.get(a.tag, [])),
+                reverse=True
+            )
+
+            for advisor in speaking_order:
+                direct_qs = pending_questions.get(advisor.tag, [])
+                transcript_text = self.format_transcript()
+
+                try:
+                    response = await advisor.generate_discussion_turn(
+                        problem=new_problem,
+                        transcript_so_far=transcript_text,
+                        all_advisors=self.advisors,
+                        targeted_questions=direct_qs if direct_qs else None,
+                        is_final_round=is_final,
+                    )
+                    self._record_message(advisor.name, advisor.tag, response, stage=stage_name)
+                    pending_questions[advisor.tag] = []
+
+                    # If advisor tagged @User
+                    user_q = self.check_user_mention(response)
+                    if user_q and self.user_input_callback:
+                        user_ans = await self._request_user_input(advisor, user_q)
+                        if user_ans and user_ans.strip():
+                            self._record_message(
+                                "USER",
+                                "@User",
+                                user_ans.strip(),
+                                stage=f"{stage_name}_user_input",
+                            )
+                            advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
+
+                    if not is_final:
+                        new_tags = self.extract_mentions(response)
+                        for t in new_tags:
+                            if t != advisor.tag:
+                                pending_questions[t].append(f"From {advisor.name} in Round {current_round}: {response[:150]}...")
+
+                except Exception as e:
+                    logger.error(f"Error in pivot debate turn for {advisor.name}: {e}")
+
+            if is_final:
+                break
+
+            if current_round == 2:
+                has_pending = any(len(qs) > 0 for qs in pending_questions.values())
+                if not has_pending and await self._check_if_consensus_reached(new_problem):
+                    break
+
+            current_round += 1
+
+        # Synthesize updated Action Plan
+        self.final_plan = await self._synthesize_action_plan(new_problem)
+        self._record_message("CHAIR / SYNTHESIS", "@Plan", self.final_plan, stage="action_plan")
+
+        # Persist to Same Session
+        self._save_session_memories(new_problem, self.final_plan)
+
+        return self.final_plan
+
+    @staticmethod
+    def list_saved_sessions() -> List[Dict[str, Any]]:
+        """Return a list of all saved session summaries sorted by timestamp descending."""
+        import json
+        if not SESSIONS_DIR.exists():
+            return []
+
+        sessions = []
+        for file in SESSIONS_DIR.glob("session_*.json"):
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                advisors_info = []
+                if "advisors" in data:
+                    advisors_info = [f"{a.get('avatar', '👤')} {a.get('tag', '')}" for a in data["advisors"]]
+                else:
+                    tags = list(dict.fromkeys([
+                        m.get("tag") for m in data.get("messages", [])
+                        if m.get("tag") and m.get("tag") not in ("@User", "@Plan", "@System")
+                    ]))
+                    advisors_info = [f"👤 {t}" for t in tags]
+
+                sessions.append({
+                    "session_id": data.get("session_id", file.stem.replace("session_", "")),
+                    "timestamp": data.get("timestamp", ""),
+                    "problem": data.get("problem", "No problem recorded"),
+                    "advisors": advisors_info,
+                    "message_count": len(data.get("messages", [])),
+                    "has_plan": bool(data.get("final_plan")),
+                    "file_path": str(file),
+                })
+            except Exception as e:
+                logger.error(f"Error reading session file {file}: {e}")
+
+        sessions.sort(key=lambda s: s["timestamp"], reverse=True)
+        return sessions
+
+    def load_session_by_id(self, session_id: str) -> bool:
+        """Load an existing session from disk, restoring its state, advisors, transcript, and plan."""
+        import json
+        clean_id = session_id.replace("session_", "").replace(".json", "")
+        target_file = SESSIONS_DIR / f"session_{clean_id}.json"
+        if not target_file.exists():
+            return False
+
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.session_id = clean_id
+            self.current_problem = data.get("problem", "")
+            self.final_plan = data.get("final_plan", "")
+
+            # Restore advisors
+            advisor_defs = data.get("advisors", [])
+            if advisor_defs:
+                self._register_advisor_defs(advisor_defs)
+            else:
+                self._load_predefined_advisors()
+
+            # Restore messages
+            self.messages = []
+            for m in data.get("messages", []):
+                msg = BoardMessage(
+                    sender=m.get("sender", "Unknown"),
+                    tag=m.get("tag", ""),
+                    content=m.get("content", ""),
+                    stage=m.get("stage", "general"),
+                )
+                if "timestamp" in m:
+                    try:
+                        msg.timestamp = datetime.fromisoformat(m["timestamp"])
+                    except Exception:
+                        pass
+                self.messages.append(msg)
+
+            return True
+        except Exception as e:
+            logger.error(f"Error loading session {session_id}: {e}")
+            return False

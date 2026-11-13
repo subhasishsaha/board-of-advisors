@@ -51,6 +51,43 @@ def render_advisors_table(advisors: list) -> None:
     console.print(table)
     console.print()
 
+def render_sessions_history_table(sessions: list) -> None:
+    """Render table of previous deliberation sessions."""
+    table = Table(
+        title="📜 Previous Deliberation Sessions",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        title_style="bold white",
+    )
+    table.add_column("#", style="bold yellow", width=4, justify="center")
+    table.add_column("Session Date/ID", style="bold white", width=18)
+    table.add_column("Problem Snippet", style="cyan", width=44)
+    table.add_column("Advisors", style="dim", width=28)
+    table.add_column("Turns", style="green", width=6, justify="center")
+    table.add_column("Plan", style="magenta", width=6, justify="center")
+
+    for idx, s in enumerate(sessions, 1):
+        ts = s.get("timestamp", "")
+        date_str = ts.split("T")[0] + " " + ts.split("T")[1][:5] if "T" in ts else s.get("session_id", "")
+        prob = s.get("problem", "")
+        prob_snippet = (prob[:41] + "...") if len(prob) > 44 else prob
+        advs = ", ".join(s.get("advisors", []))
+        if len(advs) > 28:
+            advs = advs[:25] + "..."
+        has_plan = "✅" if s.get("has_plan") else "❌"
+
+        table.add_row(
+            str(idx),
+            date_str,
+            prob_snippet,
+            advs,
+            str(s.get("message_count", 0)),
+            has_plan,
+        )
+
+    console.print(table)
+    console.print()
+
 def highlight_tags(text: str) -> Text:
     """Highlight @Advisor tags in message body."""
     rich_text = Text()

@@ -35,9 +35,25 @@ Powered by **Gemini 3.8 Flash** with **medium reasoning effort**, orchestrated u
    - Every LLM agent turn is invoked via the `agy` CLI using `--print` in detached, non-blocking mode (`stdin=subprocess.DEVNULL`, Windows no-window process creation).
    - Configured with `gemini-3.8-flash-medium` and `--effort medium`.
 
-7. **Consolidated Plan of Action & Follow-Up**:
-   - Synthesizes the debate into an executive decision, immediate 2-week actions, 30/60/90-day validation gates, risk mitigations, and closing verdicts.
-   - Interactive chat loop allows you to ask follow-up questions, tag individual advisors, or convene a new bespoke council with `/new`.
+7. **Session Controls & Key Commands**:
+   - `/new`: Creates a completely fresh session with a new problem and dynamically assembled board.
+   - `/history`: Displays previous deliberation sessions stored in `storage/sessions/` and allows you to load, review, and resume chat with that exact board.
+   - `/suspend`: Suspends the current deliberation in the *same session* without starting over; keeps the active council and accumulated context, and pivots to deliberate on a new problem or sub-task.
+
+---
+
+## ⌨️ Command Shortcuts
+
+| Command | Action |
+| :--- | :--- |
+| `/new` | Start a brand new session with a fresh tailored council |
+| `/history` | Browse past deliberations and select a previous session to resume |
+| `/suspend` | Suspend deliberation in the **same session** and pivot to a new problem |
+| `/plan` | Reprint the consolidated Plan of Action |
+| `/advisors` | View active board members, tags, and roles |
+| `/memory` | Inspect advisors' persistent private memories and beliefs |
+| `/help` | Show available commands |
+| `/exit` | Exit the application |
 
 ---
 
