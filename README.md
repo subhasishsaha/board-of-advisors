@@ -118,11 +118,13 @@ The test suite uses `pytest` with `pytest-asyncio` for comprehensive asynchronou
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-All 53 tests cover:
+All 56 tests cover:
 - Slash command parsing, command chaining prevention, and autocomplete completer
 - CLI argument parsing, thread configuration persistence (`max_agents`, `max_rounds`)
 - Session management, loading, clear-slate (`/cls`), and deletion
 - Chairperson user-inquiry evaluation logic
+- Hermetic test storage isolation (zero workspace disk artifacts in `storage/`)
+- Dynamic round table UI stage badges & system notice panels
 - Security validations (SEC-01 through SEC-06 path traversal, prompt injection, and markup escaping)
 
 ---
@@ -175,6 +177,7 @@ board-of-advisors/
 │   ├── memory/              # Persistent JSON memory for each advisor
 │   └── sessions/            # Deliberation transcripts & session logs
 ├── tests/
+│   ├── conftest.py          # Hermetic test storage isolation fixtures
 │   ├── test_security.py     # Security test suite (SEC-01 through SEC-06)
 │   └── test_slash_commands.py # CLI, slash commands, session & deliberation tests
 ├── main.py                  # Interactive CLI entrypoint

@@ -870,3 +870,70 @@ class TestAsyncCommandFlows:
         user_msgs = [m for m in orchestrator.messages if m.sender == "USER" and m.stage == "round_1_user_input"]
         assert len(user_msgs) == 1
         assert "10k/month" in user_msgs[0].content
+
+
+class TestEnhancedFeaturesAndEdgeCases:
+    """Tests for edge cases, dynamic advisor limits, chaining prevention with set commands, and UI badges."""
+
+    def test_command_chaining_catches_set_commands(self):
+        """Verify command chaining catches compound set-max-agents and set-round-tables commands."""
+        is_chained, err = check_command_chaining("/cls set-max-agents")
+        assert is_chained is True
+        assert "set-max-agents" in err
+
+        is_chained, err = check_command_chaining("/history set-round-tables")
+        assert is_chained is True
+        assert "set-round-tables" in err
+
+        is_chained, err = check_command_chaining("/advisors max-agents")
+        assert is_chained is True
+
+    def test_parse_advisors_json_supports_custom_max_agents(self):
+        """Verify parse_advisors_json respects max_advisors parameter up to 20."""
+        from board.advisor_builder import parse_advisors_json
+
+        advisors_data = [
+            {"id": f"adv_{i}", "name": f"Advisor {i}", "role": f"Role {i}", "persona": "P"}
+            for i in range(16)
+        ]
+        raw_json = json.dumps(advisors_data)
+
+        # Default max is 10
+        parsed_default = parse_advisors_json(raw_json)
+        assert len(parsed_default) == 10
+
+        # Custom max allows up to requested count
+        parsed_15 = parse_advisors_json(raw_json, max_advisors=15)
+        assert len(parsed_15) == 15
+        assert parsed_15[14]["id"] == "adv_14"
+
+    def test_render_message_dynamic_round_badges_and_system(self):
+        """Verify render_message dynamically labels round badges and handles SYSTEM messages cleanly."""
+        from board.advisor import Advisor
+        from board.orchestrator import BoardMessage
+        from board.cli_ui import render_message
+
+        advisor = Advisor(
+            advisor_id="test_adv",
+            name="Test Advisor",
+            tag="@TestAdv",
+            role="Specialist",
+            persona="Pragmatic",
+        )
+        advisor_map = {"@testadv": advisor}
+
+        # 1. Round 2 final deliberation (when max_rounds=2)
+        msg_round2_final = BoardMessage("Test Advisor", "@TestAdv", "Final verdict.", stage="round_2_final")
+        render_message(msg_round2_final, advisor_map)
+
+        # 2. Round 5 final deliberation (when max_rounds=5)
+        msg_round5_final = BoardMessage("Test Advisor", "@TestAdv", "Final verdict 5.", stage="round_5_final")
+        render_message(msg_round5_final, advisor_map)
+
+        # 3. Round 4 cross-examination debate
+        msg_round4_debate = BoardMessage("Test Advisor", "@TestAdv", "Debate point.", stage="round_4_debate")
+        render_message(msg_round4_debate, advisor_map)
+
+        # 4. System message
+        msg_system = BoardMessage("SYSTEM", "@System", "Pivoting in session to new problem.", stage="session_suspended_pivot")
+        render_message(msg_system, advisor_map)

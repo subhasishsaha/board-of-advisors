@@ -13,6 +13,13 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Distribution & build
+dist/
+build/
+*.egg-info/
 
 # Local storage state & session transcripts (preserve folder markers)
 storage/sessions/*.json

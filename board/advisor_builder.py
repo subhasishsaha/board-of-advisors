@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any, Dict, List
 
-def parse_advisors_json(raw_text: str) -> List[Dict[str, Any]]:
+def parse_advisors_json(raw_text: str, max_advisors: int = 10) -> List[Dict[str, Any]]:
     """Robustly parse a JSON array of advisor definitions from LLM output."""
     text = raw_text.strip()
     
@@ -23,14 +23,14 @@ def parse_advisors_json(raw_text: str) -> List[Dict[str, Any]]:
     if not isinstance(data, list):
         raise ValueError("Expected JSON array of advisors")
 
-    # Enforce maximum 10 advisors and sanitize
+    # Enforce maximum max_advisors advisors and sanitize
     advisors = []
     available_colors = [
         "bright_magenta", "bright_cyan", "bright_green", "bright_yellow",
         "bright_blue", "gold1", "plum2", "dark_orange3", "turquoise2", "spring_green1"
     ]
 
-    for idx, item in enumerate(data[:10]):
+    for idx, item in enumerate(data[:max_advisors]):
         name = item.get("name", f"Advisor {idx+1}").strip()
         tag = item.get("tag", "").strip()
         if not tag:

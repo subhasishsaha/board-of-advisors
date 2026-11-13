@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from board.config import DEFAULT_MODEL, DEFAULT_EFFORT
 from board.invoker import AntigravityInvoker
@@ -27,6 +28,7 @@ class Advisor:
         invoker: Optional[AntigravityInvoker] = None,
         model: str = DEFAULT_MODEL,
         effort: str = DEFAULT_EFFORT,
+        memory_dir: Optional[Path] = None,
     ):
         self.id = advisor_id
         self.name = name
@@ -39,8 +41,9 @@ class Advisor:
         self.core_beliefs = core_beliefs or []
         self.model = model
         self.effort = effort
+        self.memory_dir = memory_dir
 
-        self.memory = AdvisorMemory(advisor_id=self.id, advisor_name=self.name)
+        self.memory = AdvisorMemory(advisor_id=self.id, advisor_name=self.name, memory_dir=self.memory_dir)
         if core_beliefs:
             for b in core_beliefs:
                 self.memory.add_belief(b)

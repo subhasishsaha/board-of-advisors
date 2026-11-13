@@ -93,7 +93,9 @@ def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
             # Check if any subsequent token is a known command keyword
             known_command_names = {
                 "new", "history", "hist", "cls", "clear", "advisors", "advisor",
-                "plan", "memory", "memories", "help", "exit", "quit", "delete", "del", "rm"
+                "plan", "memory", "memories", "help", "exit", "quit", "delete", "del", "rm",
+                "set-max-agents", "set_max_agents", "max-agents", "max_agents",
+                "set-round-tables", "set_round_tables", "round-tables", "round_tables", "rounds",
             }
             first_cmd = tokens[0].lstrip("/").lower()
             if first_cmd in ("history", "advisors", "advisor", "plan", "memory", "memories", "help", "exit", "quit", "cls", "clear"):
@@ -181,8 +183,8 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         has_plan=bool(orchestrator.final_plan),
     )
     selection = await ask_input(
-        "[bold yellow]Select an option [1-9], type a command, or press Enter to return[/bold yellow]",
-        "<b><ansiyellow>Select an option [1-9], type a command, or press Enter to return</ansiyellow></b> &gt; ",
+        "[bold yellow]Select an option [1-11], type a command, or press Enter to return[/bold yellow]",
+        "<b><ansiyellow>Select an option [1-11], type a command, or press Enter to return</ansiyellow></b> &gt; ",
     )
 
     if not selection:
@@ -587,8 +589,8 @@ async def run_problem_session(orchestrator: BoardOrchestrator, problem: str):
     console.print(f"\n[bold green]🏛️ Successfully assembled a bespoke board of {len(advisors)} advisors tailored to your problem (Session: {orchestrator.session_id}):[/bold green]\n")
     render_advisors_table(advisors)
 
-    # 2. Multi-Stage Deliberation (at most 3 rounds with mid-session user input support)
-    _active_status = console.status("[bold cyan]🏛️ The Board of Advisors is deliberating (max 3 rounds)...[/bold cyan]", spinner="dots")
+    # 2. Multi-Stage Deliberation (at most orchestrator.max_rounds rounds with mid-session user input support)
+    _active_status = console.status(f"[bold cyan]🏛️ The Board of Advisors is deliberating (max {orchestrator.max_rounds} rounds)...[/bold cyan]", spinner="dots")
     _active_status.start()
     try:
         plan = await orchestrator.run_deliberation(problem=problem)

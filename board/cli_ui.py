@@ -172,6 +172,18 @@ def render_message(msg: BoardMessage, advisor_map: dict) -> None:
         console.print(panel)
         return
 
+    if msg.sender == "SYSTEM":
+        panel = Panel(
+            Text(msg.content, style="italic yellow"),
+            title="⚙️ SYSTEM NOTICE",
+            title_align="center",
+            border_style="yellow",
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+        console.print(panel)
+        return
+
     # Advisor message
     adv = advisor_map.get(msg.tag.lower())
     avatar = adv.avatar if adv else "👤"
@@ -180,12 +192,15 @@ def render_message(msg: BoardMessage, advisor_map: dict) -> None:
     role = adv.role if adv else "Advisor"
 
     stage_badge = ""
+    round_match = re.search(r"round_(\d+)", msg.stage)
+    round_num = round_match.group(1) if round_match else None
+
     if "opening" in msg.stage or msg.stage == "initial_assessment":
-        stage_badge = "[Round 1 - Opening Assessment]"
+        stage_badge = f"[Round {round_num or '1'} - Opening Assessment]"
     elif "final" in msg.stage:
-        stage_badge = "[Round 3 - Final Deliberation & Verdict]"
-    elif "round_2" in msg.stage or "debate" in msg.stage:
-        stage_badge = "[Round 2 - Cross-Examination]"
+        stage_badge = f"[Round {round_num} - Final Deliberation & Verdict]" if round_num else "[Final Deliberation & Verdict]"
+    elif "debate" in msg.stage or (round_num and int(round_num) >= 2):
+        stage_badge = f"[Round {round_num or '2'} - Cross-Examination]"
     elif msg.stage == "followup_response":
         stage_badge = "[Follow-up Response]"
 

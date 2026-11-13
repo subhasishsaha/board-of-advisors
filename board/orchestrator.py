@@ -8,7 +8,7 @@ import yaml
 
 from board.advisor import Advisor
 from board.advisor_builder import parse_advisors_json
-from board.config import DEFAULT_ADVISORS_CONFIG, SESSIONS_DIR, DEFAULT_MODEL, DEFAULT_EFFORT
+from board.config import DEFAULT_ADVISORS_CONFIG, SESSIONS_DIR, MEMORY_DIR, DEFAULT_MODEL, DEFAULT_EFFORT
 from board.invoker import AntigravityInvoker
 from board.security import sanitize_prompt_input
 
@@ -52,6 +52,8 @@ class BoardOrchestrator:
         user_input_callback: Optional[Callable[[Advisor, str], Any]] = None,
         model: str = DEFAULT_MODEL,
         effort: str = DEFAULT_EFFORT,
+        memory_dir: Optional[Path] = None,
+        sessions_dir: Optional[Path] = None,
     ):
         self.config_path = config_path or DEFAULT_ADVISORS_CONFIG
         self.max_rounds = max_rounds
@@ -60,6 +62,8 @@ class BoardOrchestrator:
         self.user_input_callback = user_input_callback
         self.model = model
         self.effort = effort
+        self.memory_dir = (memory_dir or MEMORY_DIR).resolve()
+        self.sessions_dir = (sessions_dir or SESSIONS_DIR).resolve()
 
         self.advisors: List[Advisor] = []
         self.advisors_by_tag: Dict[str, Advisor] = {}
@@ -101,6 +105,7 @@ class BoardOrchestrator:
                 core_beliefs=a_def.get("core_beliefs", []),
                 model=self.model,
                 effort=self.effort,
+                memory_dir=self.memory_dir,
             )
             self.advisors.append(adv)
             self.advisors_by_tag[adv.tag.lower()] = adv
@@ -150,7 +155,7 @@ Output ONLY a valid JSON array of advisor objects with these exact keys:
 """
         try:
             raw_response = await self.synthesizer_invoker.invoke_async(prompt)
-            advisor_defs = parse_advisors_json(raw_response)
+            advisor_defs = parse_advisors_json(raw_response, max_advisors=self.max_agents)
             if not advisor_defs:
                 raise ValueError("Parsed advisor list is empty")
             self._register_advisor_defs(advisor_defs)
@@ -598,7 +603,7 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             adv.memory.clear_working_notes()
 
         # Save session transcript to storage/sessions/
-        session_file = SESSIONS_DIR / f"session_{self.session_id}.json"
+        session_file = self.sessions_dir / f"session_{self.session_id}.json"
         try:
             with open(session_file, "w", encoding="utf-8") as f:
                 import json
@@ -634,7 +639,7 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         """Start a completely new session, resetting advisors, messages, and plan."""
         now = datetime.now()
         new_id = now.strftime("%Y%m%d_%H%M%S")
-        if new_id == self.session_id or (SESSIONS_DIR / f"session_{new_id}.json").exists():
+        if new_id == self.session_id or (self.sessions_dir / f"session_{new_id}.json").exists():
             new_id = f"{new_id}_{now.microsecond // 1000:03d}"
         self.session_id = new_id
         self.advisors = []
@@ -781,14 +786,15 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         return self.final_plan
 
     @staticmethod
-    def list_saved_sessions() -> List[Dict[str, Any]]:
+    def list_saved_sessions(sessions_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
         """Return a list of all saved session summaries sorted by timestamp descending."""
         import json
-        if not SESSIONS_DIR.exists():
+        target_dir = (sessions_dir or SESSIONS_DIR).resolve()
+        if not target_dir.exists():
             return []
 
         sessions = []
-        for file in SESSIONS_DIR.glob("session_*.json"):
+        for file in target_dir.glob("session_*.json"):
             try:
                 with open(file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -826,8 +832,8 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             logger.warning(f"Rejected invalid session_id format: '{session_id}'")
             return False
 
-        target_file = (SESSIONS_DIR / f"session_{clean_id}.json").resolve()
-        if not target_file.is_relative_to(SESSIONS_DIR.resolve()) or not target_file.is_file():
+        target_file = (self.sessions_dir / f"session_{clean_id}.json").resolve()
+        if not target_file.is_relative_to(self.sessions_dir.resolve()) or not target_file.is_file():
             return False
 
         try:
@@ -910,15 +916,16 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             return False
 
     @staticmethod
-    def delete_session_by_id(session_id: str) -> bool:
+    def delete_session_by_id(session_id: str, sessions_dir: Optional[Path] = None) -> bool:
         """Delete a saved session JSON file from disk, strictly constrained to SESSIONS_DIR."""
         clean_id = session_id.replace("session_", "").replace(".json", "").strip()
         if not re.fullmatch(r"^[a-zA-Z0-9_-]+$", clean_id):
             logger.warning(f"Rejected invalid session_id format for deletion: '{session_id}'")
             return False
 
-        target_file = (SESSIONS_DIR / f"session_{clean_id}.json").resolve()
-        base_dir = SESSIONS_DIR.resolve()
+        target_dir = (sessions_dir or SESSIONS_DIR).resolve()
+        target_file = (target_dir / f"session_{clean_id}.json").resolve()
+        base_dir = target_dir
 
         if not target_file.is_relative_to(base_dir):
             logger.error(f"Path traversal attempt blocked in session deletion: '{session_id}'")
