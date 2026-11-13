@@ -32,6 +32,7 @@ class Advisor:
         self.bio = bio.strip()
         self.avatar = avatar
         self.color = color
+        self.core_beliefs = core_beliefs or []
 
         self.memory = AdvisorMemory(advisor_id=self.id, advisor_name=self.name)
         if core_beliefs:

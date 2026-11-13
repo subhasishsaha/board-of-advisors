@@ -39,11 +39,13 @@ def render_advisors_table(advisors: list) -> None:
     table.add_column("Expertise / Angle", style="dim", width=45)
 
     for adv in advisors:
+        beliefs = getattr(adv, "core_beliefs", None) or (adv.memory.core_beliefs if hasattr(adv, "memory") else [])
+        summary = beliefs[0] if beliefs else (adv.bio[:45] if hasattr(adv, "bio") else "")
         table.add_row(
             f"{adv.avatar} {adv.tag}",
             adv.name,
             adv.role,
-            adv.core_beliefs[0] if adv.core_beliefs else adv.bio[:45],
+            summary,
         )
 
     console.print(table)

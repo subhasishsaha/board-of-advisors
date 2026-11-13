@@ -20,26 +20,44 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 def find_agy_executable() -> str:
     """Find the path to the agy (Antigravity CLI) executable."""
     env_path = os.environ.get("AGY_PATH")
-    if env_path and os.path.isfile(env_path):
-        return env_path
+    if env_path:
+        try:
+            if os.path.isfile(env_path):
+                return env_path
+        except Exception:
+            return env_path
     
-    which_path = shutil.which("agy")
-    if which_path and os.path.isfile(which_path):
-        return which_path
+    try:
+        which_path = shutil.which("agy")
+        if which_path and os.path.isfile(which_path):
+            return which_path
+    except Exception:
+        pass
 
     # Common Windows install path
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if local_app_data:
         candidate = Path(local_app_data) / "agy" / "bin" / "agy.exe"
-        if candidate.is_file():
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except PermissionError:
+            # File exists but access to stat is restricted in sandbox
             return str(candidate)
+        except Exception:
+            pass
 
     # User profile fallback
     user_profile = os.environ.get("USERPROFILE", "")
     if user_profile:
         candidate = Path(user_profile) / "AppData" / "Local" / "agy" / "bin" / "agy.exe"
-        if candidate.is_file():
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except PermissionError:
             return str(candidate)
+        except Exception:
+            pass
 
     # Default fallback
     return "agy"
