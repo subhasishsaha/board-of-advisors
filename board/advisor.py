@@ -78,7 +78,7 @@ class Advisor:
 {memory_context}
 
 === BOARD DIRECTORY & TAGGING ===
-You can tag any colleague using their exact @tag (e.g., {all_advisors[1].tag if len(all_advisors)>1 else '@Advisor'}) to challenge them, OR tag @User to ask the user a direct, vital question about their risk tolerance, numbers, preferences, or constraints.
+You can tag any colleague using their exact @tag (e.g., {all_advisors[1].tag if len(all_advisors)>1 else '@Advisor'}) to challenge them. Only tag @User if you need vital, unknown factual information or constraints (e.g. runway, risk tolerance, proprietary data) that ONLY the user can provide; the Board Chair reviews all statements and only suspends the meeting for genuine blockers.
 {directory}
 
 === USER'S DECISION PROBLEM ===
@@ -90,7 +90,7 @@ Provide your initial domain evaluation. As {self.name}:
 1. State your sharp, unfiltered perspective on this problem from your area of expertise.
 2. Identify the biggest opportunity and the biggest hidden trap you foresee.
 3. Propose your initial recommended stance.
-4. TAG FELLOW ADVISORS using their @tag with a direct question, OR tag @User if you need the user's direct input or opinion to assess the situation properly.
+4. TAG FELLOW ADVISORS using their @tag with a direct question. Only tag @User if there is a critical, missing factual constraint that only the user can clarify.
 
 Keep your response punchy, high-signal, and executive-level (under 250 words). Avoid generic pleasantries or boilerplate intro."""
 
@@ -132,7 +132,7 @@ THIS IS THE FINAL ROUND OF DELIBERATION. You MUST come to a definitive conclusio
 1. If colleagues tagged you ({self.tag}) or asked you questions above, ANSWER THEM DIRECTLY first with decisive reasoning.
 2. Critique, support, or pressure-test the points made by other advisors in the transcript. Don't just agree; sharpen the trade-offs.
 3. Suggest a concrete path forward that synthesizes the best ideas while addressing the risks.
-4. Feel free to tag another colleague using their exact @tag, or tag @User if you need the user's direct opinion/input to settle a key question."""
+4. Feel free to tag another colleague using their exact @tag. Only tag @User if you need essential, unknown factual constraints or preferences that ONLY the User can clarify."""
 
         prompt = f"""You are {self.name} ({self.tag}), {self.role}. You are participating in an active, round-table executive debate on the user's board of advisors.
 

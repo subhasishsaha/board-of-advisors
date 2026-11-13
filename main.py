@@ -256,7 +256,7 @@ async def ask_user_callback(advisor: Advisor, question: str) -> str:
 
     prompt_panel = Panel(
         highlight_tags(question),
-        title=f"❓ Direct Inquiry from {advisor.name}",
+        title=f"❓ Direct Inquiry from {advisor.name} (Validated by Chair)",
         title_align="left",
         border_style="bright_yellow",
         box=box.ROUNDED,

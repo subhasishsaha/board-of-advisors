@@ -187,6 +187,109 @@ Output ONLY a valid JSON array of advisor objects with these exact keys:
             return " ".join(matched)
         return text.strip()
 
+    async def evaluate_user_input_need(
+        self,
+        advisor: Advisor,
+        statement: str,
+        problem: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Intelligently read the advisor's statement and current deliberation scenario
+        to determine if the board truly requires direct user input, rather than relying
+        solely on keyword matching.
+
+        Returns:
+            The specific question/inquiry string to ask the user if input is genuinely
+            needed, or None if deliberation can continue autonomously.
+        """
+        problem = problem or self.current_problem
+
+        # Fast pre-screen: Does the statement contain any indicator of an inquiry,
+        # request for clarification, or mention of the user / constraints?
+        inquiry_indicators = re.search(
+            r"(\?|@user\b|\buser\b|\byou\b|\byour\b|\bclarif|\bdecid|\bprefer|\bbudget\b|\brunway\b|\bconstraint)",
+            statement,
+            re.IGNORECASE,
+        )
+        if not inquiry_indicators:
+            return None
+
+        # Format recent debate context (last 4 messages) for the orchestrator to read
+        recent_context = context or self.format_transcript(last_n=4)
+
+        prompt = f"""You are the Executive Chairperson and Facilitator of the Board of Advisors.
+You facilitate strategic deliberations for the User (the founder / CEO / decision-maker).
+The User's core decision dilemma:
+"{problem}"
+
+=== RECENT BOARD DISCUSSION CONTEXT ===
+{recent_context}
+
+=== ADVISOR STATEMENT UNDER REVIEW ===
+Advisor {advisor.name} ({advisor.tag}, {advisor.role}) just stated:
+\"\"\"
+{statement}
+\"\"\"
+
+=== CHAIRPERSON RESPONSIBILITY ===
+You must protect the User from unnecessary interruptions while ensuring the board does not stall on critical unknowns.
+Read this advisor's statement and the current scenario carefully.
+Decide: Does the current scenario GENUINELY REQUIRE suspending the board meeting to ask the User for direct input?
+
+=== STRICT RULES FOR DETERMINATION ===
+DO NOT interrupt the User for:
+- Rhetorical questions (e.g. "Why would anyone do that?", "Does the user want to fail? Of course not.")
+- Casual, historical, or passing mentions (e.g. "As @User said in the prompt...", "We must protect the user's margins.")
+- Strategic, operational, or technical questions that the advisors themselves are hired to analyze, debate, and recommend (e.g. "Should we enter EU or US?", "Which pricing tier is best?").
+- Debate challenges or questions directed at other advisors.
+
+ONLY interrupt the User if:
+- There is a genuine missing fact, proprietary metric, personal risk tolerance, or hard constraint that ONLY the User knows and has not provided yet.
+- The advisor poses a direct, critical question or decision fork to the User that the board cannot reasonably resolve on its own.
+
+=== OUTPUT FORMAT ===
+If user input is NOT genuinely needed:
+NEEDS_USER_INPUT: NO
+REASON: <Brief explanation why advisors can proceed autonomously>
+
+If user input IS genuinely needed:
+NEEDS_USER_INPUT: YES
+QUESTION: <Concise, direct, high-signal question to ask the User>"""
+
+        try:
+            raw = await self.synthesizer_invoker.invoke_async(prompt)
+            lines = raw.strip().splitlines()
+            needs_input = False
+            extracted_question = ""
+
+            for line in lines:
+                clean = line.strip()
+                if clean.upper().startswith("NEEDS_USER_INPUT:"):
+                    val = clean.split(":", 1)[1].strip().upper()
+                    if "YES" in val:
+                        needs_input = True
+                elif clean.upper().startswith("QUESTION:"):
+                    extracted_question = clean.split(":", 1)[1].strip()
+
+            if needs_input:
+                if not extracted_question:
+                    # Fallback to extracting sentences with questions
+                    questions = [s.strip() for s in re.split(r"(?<=[.?!])\s+", statement) if "?" in s]
+                    extracted_question = " ".join(questions) if questions else statement.strip()
+                logger.info(f"Orchestrator approved user input request from {advisor.name}: {extracted_question}")
+                return extracted_question
+
+            logger.debug(f"Orchestrator determined no user input needed for {advisor.name}'s statement.")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Orchestrator evaluation failed ({e}), falling back to direct question check")
+            # Fallback: only trigger if there is an explicit question mark directly addressed to @User
+            if re.search(r"@user\b[^.?!]*\?", statement, re.IGNORECASE):
+                return self.check_user_mention(statement)
+            return None
+
     async def _request_user_input(self, advisor: Advisor, question: str) -> Optional[str]:
         """Invoke the callback to suspend round table and get user input."""
         if not self.user_input_callback:
@@ -266,12 +369,12 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
             for t in tags:
                 pending_questions[t].append(f"From {advisor.name} ({advisor.tag}): {response[:150]}...")
 
-        # If any opening assessment asked @User for critical input, suspend and collect it
+        # Step 1: Check if any opening assessment genuinely requires user input (Chair reads scenario)
         for res in initial_results:
             if isinstance(res, Exception):
                 continue
             advisor, response = res
-            user_q = self.check_user_mention(response)
+            user_q = await self.evaluate_user_input_need(advisor, response, problem)
             if user_q and self.user_input_callback:
                 user_ans = await self._request_user_input(advisor, user_q)
                 if user_ans and user_ans.strip():
@@ -314,8 +417,8 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
                     # Clear handled questions
                     pending_questions[advisor.tag] = []
 
-                    # If advisor tagged @User for input, suspend deliberation and wait for user's response
-                    user_q = self.check_user_mention(response)
+                    # Intelligently evaluate whether the advisor's statement genuinely requires user input
+                    user_q = await self.evaluate_user_input_need(advisor, response, problem)
                     if user_q and self.user_input_callback:
                         user_ans = await self._request_user_input(advisor, user_q)
                         if user_ans and user_ans.strip():
@@ -553,12 +656,12 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             for t in tags:
                 pending_questions[t].append(f"From {advisor.name} ({advisor.tag}): {response[:150]}...")
 
-        # If any opening assessment asked @User
+        # Step 1: Check if any opening assessment genuinely requires user input (Chair reads scenario)
         for res in initial_results:
             if isinstance(res, Exception):
                 continue
             advisor, response = res
-            user_q = self.check_user_mention(response)
+            user_q = await self.evaluate_user_input_need(advisor, response, new_problem)
             if user_q and self.user_input_callback:
                 user_ans = await self._request_user_input(advisor, user_q)
                 if user_ans and user_ans.strip():
@@ -595,8 +698,8 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
                     self._record_message(advisor.name, advisor.tag, response, stage=stage_name)
                     pending_questions[advisor.tag] = []
 
-                    # If advisor tagged @User
-                    user_q = self.check_user_mention(response)
+                    # Intelligently evaluate whether the advisor's statement genuinely requires user input
+                    user_q = await self.evaluate_user_input_need(advisor, response, new_problem)
                     if user_q and self.user_input_callback:
                         user_ans = await self._request_user_input(advisor, user_q)
                         if user_ans and user_ans.strip():

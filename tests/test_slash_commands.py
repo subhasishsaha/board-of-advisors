@@ -547,6 +547,157 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
 
         test_file.unlink(missing_ok=True)
 
+    async def test_evaluate_user_input_need_no_indicators_skips_llm(self):
+        """Verify that plain statements without questions or user/constraint indicators skip LLM reading."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+        statement = "We should focus on organic growth and improving gross margins this quarter."
+
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
+            result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
+            mock_invoke.assert_not_called()
+            self.assertIsNone(result)
+
+    async def test_evaluate_user_input_need_rejects_casual_user_mention(self):
+        """Verify orchestrator reads and rejects casual/historical mentions of @User without interrupting."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+        statement = "As @User mentioned in the initial problem, runway is 12 months, so @Marcus is mistaken."
+
+        llm_reply = (
+            "NEEDS_USER_INPUT: NO\n"
+            "REASON: The advisor is merely citing context already provided in the original dilemma."
+        )
+
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
+            mock_invoke.return_value = llm_reply
+            result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
+            mock_invoke.assert_called_once()
+            self.assertIsNone(result)
+
+    async def test_evaluate_user_input_need_rejects_rhetorical_question(self):
+        """Verify orchestrator reads and rejects rhetorical debate questions."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+        statement = "Would @User want to risk 60% equity dilution on an unproven pivot? Of course not."
+
+        llm_reply = (
+            "NEEDS_USER_INPUT: NO\n"
+            "REASON: Rhetorical question already answered directly by the advisor in their statement."
+        )
+
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
+            mock_invoke.return_value = llm_reply
+            result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
+            mock_invoke.assert_called_once()
+            self.assertIsNone(result)
+
+    async def test_evaluate_user_input_need_approves_genuine_user_input_request(self):
+        """Verify orchestrator reads scenario and approves genuine missing fact inquiry."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+        statement = "We cannot model profitability without private metrics: @User, what is your net monthly burn rate?"
+
+        llm_reply = (
+            "NEEDS_USER_INPUT: YES\n"
+            "QUESTION: What is your net monthly burn rate?"
+        )
+
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
+            mock_invoke.return_value = llm_reply
+            result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
+            mock_invoke.assert_called_once()
+            self.assertEqual(result, "What is your net monthly burn rate?")
+
+    async def test_evaluate_user_input_need_approves_without_explicit_user_keyword(self):
+        """Verify orchestrator reads scenario and approves critical question even without '@User' tag."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+        statement = "Before choosing between Series A or bootstrapping, what is the founder's personal timeline for an exit?"
+
+        llm_reply = (
+            "NEEDS_USER_INPUT: YES\n"
+            "QUESTION: What is your personal timeline and preferred horizon for an exit?"
+        )
+
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", new_callable=AsyncMock) as mock_invoke:
+            mock_invoke.return_value = llm_reply
+            result = await orchestrator.evaluate_user_input_need(advisor, statement, "Test dilemma")
+            mock_invoke.assert_called_once()
+            self.assertEqual(result, "What is your personal timeline and preferred horizon for an exit?")
+
+    async def test_evaluate_user_input_need_fallback_on_invoker_failure(self):
+        """Verify safe fallback when invoker raises an unexpected error."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        advisor = orchestrator.advisors[0]
+
+        # Case A: Casual mention with exception -> defaults to None (no false interruption)
+        statement_casual = "As @User said earlier, we should proceed carefully."
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", side_effect=RuntimeError("CLI failure")):
+            res_casual = await orchestrator.evaluate_user_input_need(advisor, statement_casual, "Test dilemma")
+            self.assertIsNone(res_casual)
+
+        # Case B: Explicit @User question with question mark -> falls back to question extraction
+        statement_direct = "@User, can you confirm if the budget is under $50k?"
+        with patch.object(orchestrator.synthesizer_invoker, "invoke_async", side_effect=RuntimeError("CLI failure")):
+            res_direct = await orchestrator.evaluate_user_input_need(advisor, statement_direct, "Test dilemma")
+            self.assertIsNotNone(res_direct)
+            self.assertIn("@User", res_direct)
+
+    async def test_deliberation_flow_user_input_validated_by_chair(self):
+        """Verify deliberation flow suspends only when orchestrator reads and validates user input need."""
+        user_input_called = False
+
+        async def mock_user_callback(advisor, question):
+            nonlocal user_input_called
+            user_input_called = True
+            return "Our maximum acceptable burn is $10k/month."
+
+        orchestrator = BoardOrchestrator(user_input_callback=mock_user_callback)
+        orchestrator._load_predefined_advisors()
+        # Keep only 2 advisors for fast test execution
+        orchestrator.advisors = orchestrator.advisors[:2]
+        orchestrator.advisors_by_tag = {a.tag.lower(): a for a in orchestrator.advisors}
+        orchestrator.max_rounds = 2
+
+        # Round 1: Advisor 0 mentions @User casually (should NOT trigger callback)
+        # Round 1: Advisor 1 asks a real question (orchestrator approves, SHOULD trigger callback)
+        adv0_resp = "As @User said, our focus is B2B. @David, do you agree?"
+        adv1_resp = "I need clarity: what is your max burn rate? @User please clarify."
+
+        async def mock_initial_assessment(problem, all_advisors, user_notes=""):
+            return adv0_resp
+
+        orchestrator.advisors[0].generate_initial_assessment = AsyncMock(return_value=adv0_resp)
+        orchestrator.advisors[1].generate_initial_assessment = AsyncMock(return_value=adv1_resp)
+        orchestrator.advisors[0].generate_discussion_turn = AsyncMock(return_value="Final conclusion.")
+        orchestrator.advisors[1].generate_discussion_turn = AsyncMock(return_value="Final conclusion.")
+
+        # Mock evaluate_user_input_need to return None for adv0, and a question for adv1
+        async def mock_evaluate(adv, text, prob=None, ctx=None):
+            if "max burn" in text:
+                return "What is your maximum acceptable burn rate?"
+            return None
+
+        orchestrator.evaluate_user_input_need = mock_evaluate
+        orchestrator._synthesize_action_plan = AsyncMock(return_value="Action Plan")
+        orchestrator._save_session_memories = lambda p, plan: None
+
+        plan = await orchestrator.run_deliberation("Test problem")
+        self.assertEqual(plan, "Action Plan")
+        self.assertTrue(user_input_called)
+
+        # Check recorded messages to verify user input was incorporated
+        user_msgs = [m for m in orchestrator.messages if m.sender == "USER" and m.stage == "round_1_user_input"]
+        self.assertEqual(len(user_msgs), 1)
+        self.assertIn("10k/month", user_msgs[0].content)
+
 
 if __name__ == "__main__":
     unittest.main()
