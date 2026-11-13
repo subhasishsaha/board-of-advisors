@@ -481,7 +481,11 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
 
     def reset_session(self) -> str:
         """Start a completely new session, resetting advisors, messages, and plan."""
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        now = datetime.now()
+        new_id = now.strftime("%Y%m%d_%H%M%S")
+        if new_id == self.session_id or (SESSIONS_DIR / f"session_{new_id}.json").exists():
+            new_id = f"{new_id}_{now.microsecond // 1000:03d}"
+        self.session_id = new_id
         self.advisors = []
         self.advisors_by_tag = {}
         self.advisors_by_id = {}
@@ -670,7 +674,31 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             if advisor_defs:
                 self._register_advisor_defs(advisor_defs)
             else:
-                self._load_predefined_advisors()
+                # Reconstruct advisors from message history if missing in legacy session
+                unique_senders = {}
+                for m in data.get("messages", []):
+                    snd = m.get("sender")
+                    tg = m.get("tag")
+                    if snd and tg and snd not in ("USER", "CHAIR / SYNTHESIS", "SYSTEM") and tg not in ("@User", "@Plan", "@System"):
+                        if snd not in unique_senders:
+                            unique_senders[snd] = tg
+                if unique_senders:
+                    extracted_defs = []
+                    for idx, (snd, tg) in enumerate(unique_senders.items()):
+                        extracted_defs.append({
+                            "id": re.sub(r"[^\w]", "_", snd.lower()),
+                            "name": snd,
+                            "tag": tg,
+                            "role": "Executive Advisor",
+                            "avatar": "👤",
+                            "color": "cyan",
+                            "persona": f"You are {snd} ({tg}). Participate authentically in character.",
+                            "bio": f"{snd}, Executive Advisor.",
+                            "core_beliefs": [],
+                        })
+                    self._register_advisor_defs(extracted_defs)
+                else:
+                    self._load_predefined_advisors()
 
             # Restore messages
             self.messages = []
@@ -692,3 +720,42 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         except Exception as e:
             logger.error(f"Error loading session {session_id}: {e}")
             return False
+
+    @staticmethod
+    def delete_session_by_id(session_id: str) -> bool:
+        """Delete a saved session JSON file from disk."""
+        clean_id = session_id.replace("session_", "").replace(".json", "").strip()
+        candidates = [
+            SESSIONS_DIR / f"session_{clean_id}.json",
+            SESSIONS_DIR / f"{clean_id}.json",
+            SESSIONS_DIR / session_id,
+            Path(session_id),
+        ]
+        for target_file in candidates:
+            if target_file.exists() and target_file.is_file():
+                try:
+                    target_file.unlink()
+                    return True
+                except Exception as e:
+                    logger.error(f"Error deleting session file {target_file}: {e}")
+                    return False
+        return False
+
+    @classmethod
+    def delete_session_by_index(cls, index: int) -> Optional[str]:
+        """Delete a saved session by its 1-based index from list_saved_sessions. Returns session_id if deleted, else None."""
+        sessions = cls.list_saved_sessions()
+        if 1 <= index <= len(sessions):
+            target = sessions[index - 1]
+            session_id = target["session_id"]
+            if cls.delete_session_by_id(session_id):
+                return session_id
+        return None
+
+    def load_session_by_index(self, index: int) -> bool:
+        """Load a saved session by its 1-based index from list_saved_sessions."""
+        sessions = self.list_saved_sessions()
+        if 1 <= index <= len(sessions):
+            target = sessions[index - 1]
+            return self.load_session_by_id(target["session_id"])
+        return False

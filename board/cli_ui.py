@@ -52,9 +52,11 @@ def render_advisors_table(advisors: list) -> None:
     console.print()
 
 def render_sessions_history_table(sessions: list) -> None:
-    """Render table of previous deliberation sessions."""
+    """Render table of previous deliberation sessions with load/delete action guidance."""
     table = Table(
         title="📜 Previous Deliberation Sessions",
+        caption="[dim]Options: Enter [bold cyan]#[/bold cyan] to load session  •  [bold red]d #[/bold red] (e.g. 'd 2') to delete  •  [bold yellow]Enter[/bold yellow] to cancel[/dim]",
+        caption_justify="center",
         box=box.ROUNDED,
         header_style="bold cyan",
         title_style="bold white",
