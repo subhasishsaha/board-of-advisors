@@ -97,12 +97,12 @@ def render_slash_menu(has_board: bool = False, has_plan: bool = False) -> None:
         box=box.ROUNDED,
         header_style="bold cyan",
         title_style="bold white",
-        caption="[dim]Tip: Enter command (e.g. [bold yellow]/history[/bold yellow]) or option number [bold yellow][1-9][/bold yellow]  •  Chaining is blocked[/dim]",
+        caption="[dim]Tip: Enter command (e.g. [bold yellow]/history[/bold yellow]) or option number [bold yellow][1-11][/bold yellow]  •  Chaining is blocked[/dim]",
         caption_justify="center",
     )
     table.add_column("#", style="bold yellow", width=4, justify="center")
-    table.add_column("Command", style="bold cyan", width=20)
-    table.add_column("Description", style="white", width=46)
+    table.add_column("Command", style="bold cyan", width=22)
+    table.add_column("Description", style="white", width=44)
     table.add_column("Context Status", style="dim", width=18, justify="center")
 
     status_board = "[green]Active[/green]" if has_board else "[dim]No board yet[/dim]"
@@ -117,7 +117,9 @@ def render_slash_menu(has_board: bool = False, has_plan: bool = False) -> None:
         ("6", "/plan", "Review the consolidated Plan of Action", status_plan),
         ("7", "/memory", "View persistent advisor memories", status_board),
         ("8", "/help", "Show full command help & guidelines", "[cyan]Available[/cyan]"),
-        ("9", "/exit", "Exit the council session", "[dim]Quit[/dim]"),
+        ("9", "/set-max-agents <#>", "Set max dynamic advisors for this thread", "[cyan]Thread config[/cyan]"),
+        ("10", "/set-round-tables <#>", "Set deliberation rounds for this thread", "[cyan]Thread config[/cyan]"),
+        ("11", "/exit", "Exit the council session", "[dim]Quit[/dim]"),
     ]
 
     for num, cmd_name, desc, status in commands_data:

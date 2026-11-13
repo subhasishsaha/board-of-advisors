@@ -14,6 +14,9 @@ from main import (
     parse_args,
     parse_command,
     check_command_chaining,
+    validate_integer_arg,
+    handle_set_max_agents_command,
+    handle_set_round_tables_command,
     handle_slash_trigger,
     handle_history_command,
     handle_delete_command,
@@ -697,6 +700,159 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         user_msgs = [m for m in orchestrator.messages if m.sender == "USER" and m.stage == "round_1_user_input"]
         self.assertEqual(len(user_msgs), 1)
         self.assertIn("10k/month", user_msgs[0].content)
+
+    def test_validate_integer_arg(self):
+        """Verify strict integer validation: only positive integers pass, everything else is rejected."""
+        # Valid positive integers
+        val, err = validate_integer_arg("5", "set-max-agents")
+        self.assertEqual(val, 5)
+        self.assertIsNone(err)
+
+        val, err = validate_integer_arg("  10  ", "set-max-agents")
+        self.assertEqual(val, 10)
+        self.assertIsNone(err)
+
+        # Empty / missing value
+        val, err = validate_integer_arg("", "set-max-agents")
+        self.assertIsNone(val)
+        self.assertIn("Missing value", err)
+
+        # Floats
+        val, err = validate_integer_arg("5.5", "set-max-agents")
+        self.assertIsNone(val)
+        self.assertIn("must be an integer, nothing else", err)
+
+        # Non-numeric text
+        val, err = validate_integer_arg("five", "set-max-agents")
+        self.assertIsNone(val)
+        self.assertIn("must be an integer, nothing else", err)
+
+        # Alphanumeric / extra tokens
+        val, err = validate_integer_arg("5 advisors", "set-max-agents")
+        self.assertIsNone(val)
+        self.assertIn("must be an integer, nothing else", err)
+
+        val, err = validate_integer_arg("5abc", "set-max-agents")
+        self.assertIsNone(val)
+        self.assertIn("must be an integer, nothing else", err)
+
+        # Zero or negative
+        val, err = validate_integer_arg("0", "set-max-agents", min_val=1)
+        self.assertIsNone(val)
+        self.assertIn("at least 1", err)
+
+        val, err = validate_integer_arg("-3", "set-max-agents", min_val=1)
+        self.assertIsNone(val)
+        self.assertIn("at least 1", err)
+
+        # Exceeding max_val
+        val, err = validate_integer_arg("25", "set-max-agents", min_val=1, max_val=20)
+        self.assertIsNone(val)
+        self.assertIn("cannot exceed 20", err)
+
+    def test_handle_set_max_agents_command(self):
+        """Verify setting max dynamic advisors on current thread and pruning active board if necessary."""
+        orchestrator = BoardOrchestrator()
+        self.assertEqual(orchestrator.max_agents, 10)
+
+        # Successfully set max_agents
+        res = handle_set_max_agents_command(orchestrator, "6")
+        self.assertTrue(res)
+        self.assertEqual(orchestrator.max_agents, 6)
+
+        # Successfully prune active advisors if new max_agents is lower
+        orchestrator._load_predefined_advisors()
+        self.assertGreater(len(orchestrator.advisors), 2)
+        res = handle_set_max_agents_command(orchestrator, "2")
+        self.assertTrue(res)
+        self.assertEqual(orchestrator.max_agents, 2)
+        self.assertEqual(len(orchestrator.advisors), 2)
+
+        # Rejects non-integers without modifying max_agents
+        res = handle_set_max_agents_command(orchestrator, "six")
+        self.assertFalse(res)
+        self.assertEqual(orchestrator.max_agents, 2)
+
+        res = handle_set_max_agents_command(orchestrator, "2.5")
+        self.assertFalse(res)
+        self.assertEqual(orchestrator.max_agents, 2)
+
+    def test_handle_set_round_tables_command(self):
+        """Verify setting deliberation rounds on current thread."""
+        orchestrator = BoardOrchestrator()
+        self.assertEqual(orchestrator.max_rounds, 3)
+
+        # Successfully set max_rounds
+        res = handle_set_round_tables_command(orchestrator, "5")
+        self.assertTrue(res)
+        self.assertEqual(orchestrator.max_rounds, 5)
+
+        # Rejects non-integers without modifying max_rounds
+        res = handle_set_round_tables_command(orchestrator, "invalid")
+        self.assertFalse(res)
+        self.assertEqual(orchestrator.max_rounds, 5)
+
+        res = handle_set_round_tables_command(orchestrator, "0")
+        self.assertFalse(res)
+        self.assertEqual(orchestrator.max_rounds, 5)
+
+    def test_new_thread_resets_max_agents_and_rounds_to_defaults(self):
+        """Verify that per-thread settings (max_agents, max_rounds) reset to defaults for a new thread."""
+        orchestrator = BoardOrchestrator()
+        orchestrator.max_agents = 4
+        orchestrator.max_rounds = 5
+
+        old_session_id = orchestrator.session_id
+        new_session_id = orchestrator.reset_session()
+
+        self.assertNotEqual(new_session_id, old_session_id)
+        # Must reset to default value of 10 and 3
+        self.assertEqual(orchestrator.max_agents, 10)
+        self.assertEqual(orchestrator.max_rounds, 3)
+
+    def test_parse_command_set_max_agents_and_rounds(self):
+        """Verify parser resolves all aliases for set-max-agents and set-round-tables."""
+        # set-max-agents
+        cmd, arg = parse_command("/set-max-agents 6")
+        self.assertEqual(cmd, "set-max-agents")
+        self.assertEqual(arg, "6")
+
+        cmd, arg = parse_command("/set_max_agents 8")
+        self.assertEqual(cmd, "set-max-agents")
+        self.assertEqual(arg, "8")
+
+        cmd, arg = parse_command("/max-agents 5")
+        self.assertEqual(cmd, "set-max-agents")
+        self.assertEqual(arg, "5")
+
+        cmd, arg = parse_command("set-max-agents 7")
+        self.assertEqual(cmd, "set-max-agents")
+        self.assertEqual(arg, "7")
+
+        # set-round-tables
+        cmd, arg = parse_command("/set-round-tables 4")
+        self.assertEqual(cmd, "set-round-tables")
+        self.assertEqual(arg, "4")
+
+        cmd, arg = parse_command("/set_round_tables 2")
+        self.assertEqual(cmd, "set-round-tables")
+        self.assertEqual(arg, "2")
+
+        cmd, arg = parse_command("/round-tables 5")
+        self.assertEqual(cmd, "set-round-tables")
+        self.assertEqual(arg, "5")
+
+        cmd, arg = parse_command("/rounds 3")
+        self.assertEqual(cmd, "set-round-tables")
+        self.assertEqual(arg, "3")
+
+    def test_cli_completer_includes_set_commands(self):
+        """Verify completer yields /set-max-agents and /set-round-tables."""
+        completer = BoardSlashCompleter()
+        doc = Document("/set")
+        completions = [c.text for c in completer.get_completions(doc, None)]
+        self.assertIn("/set-max-agents", completions)
+        self.assertIn("/set-round-tables", completions)
 
 
 if __name__ == "__main__":

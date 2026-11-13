@@ -127,10 +127,16 @@ def parse_command(user_input: str) -> Tuple[Optional[str], str]:
     known_commands = {
         "new", "history", "hist", "cls", "clear", "advisors", "advisor",
         "plan", "memory", "memories", "help", "?", "exit", "quit",
-        "delete", "del", "rm", "slash", "menu", "options"
+        "delete", "del", "rm", "slash", "menu", "options",
+        "set-max-agents", "set_max_agents", "max-agents", "max_agents",
+        "set-round-tables", "set_round_tables", "round-tables", "round_tables", "rounds"
     }
 
     if is_slash or keyword in known_commands:
+        if keyword in ("set-max-agents", "set_max_agents", "max-agents", "max_agents"):
+            keyword = "set-max-agents"
+        elif keyword in ("set-round-tables", "set_round_tables", "round-tables", "round_tables", "rounds"):
+            keyword = "set-round-tables"
         return keyword, arg
 
     return None, text
@@ -143,6 +149,8 @@ def show_help():
   [yellow]/history[/yellow]             - Browse previous sessions to load or delete ('d #')
   [yellow]/delete <#>[/yellow]          - Delete a specific saved session by index or ID
   [yellow]/cls[/yellow]                 - Clear current session slate without starting a new session
+  [yellow]/set-max-agents <#>[/yellow]  - Set max dynamic advisors for this thread (default: 10)
+  [yellow]/set-round-tables <#>[/yellow]- Set deliberation rounds for this thread (default: 3)
   [yellow]/advisors[/yellow]            - Show active board members and their tags
   [yellow]/plan[/yellow]                - Review the consolidated Plan of Action
   [yellow]/memory[/yellow]              - View what advisors have stored in persistent memory
@@ -194,7 +202,9 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         "6": "plan",
         "7": "memory",
         "8": "help",
-        "9": "exit",
+        "9": "set-max-agents",
+        "10": "set-round-tables",
+        "11": "exit",
     }
 
     if selection in num_map:
@@ -220,6 +230,20 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         await handle_new_command(orchestrator, arg)
     elif cmd in ("cls", "clear"):
         handle_cls_command(orchestrator)
+    elif cmd == "set-max-agents":
+        if not arg:
+            arg = await ask_input(
+                f"[bold yellow]Enter max number of advisors for thread {orchestrator.session_id} (current: {orchestrator.max_agents})[/bold yellow]",
+                "<b><ansiyellow>Max advisors (integer)</ansiyellow></b> &gt; ",
+            )
+        handle_set_max_agents_command(orchestrator, arg)
+    elif cmd == "set-round-tables":
+        if not arg:
+            arg = await ask_input(
+                f"[bold yellow]Enter number of round tables for thread {orchestrator.session_id} (current: {orchestrator.max_rounds})[/bold yellow]",
+                "<b><ansiyellow>Round tables (integer)</ansiyellow></b> &gt; ",
+            )
+        handle_set_round_tables_command(orchestrator, arg)
     elif cmd in ("advisors", "advisor"):
         if orchestrator.advisors:
             render_advisors_table(orchestrator.advisors)
@@ -434,6 +458,77 @@ def parse_args():
     )
     return parser.parse_args()
 
+def validate_integer_arg(
+    arg: str,
+    command_name: str,
+    min_val: int = 1,
+    max_val: Optional[int] = None,
+) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Validates that the argument after a slash command is strictly an integer, nothing else.
+    Returns (parsed_int, None) on success, or (None, error_message) on failure.
+    """
+    clean = arg.strip()
+    if not clean:
+        return None, f"Missing value. Usage: /{command_name} <integer_value>"
+
+    # Strictly integer check: only digits, with no extra tokens, symbols, or decimals
+    if not re.fullmatch(r"[-+]?\d+", clean):
+        return None, f"Value must be an integer, nothing else. Received '{clean}'."
+
+    try:
+        val = int(clean)
+    except ValueError:
+        return None, f"Value must be a valid integer. Received '{clean}'."
+
+    if val < min_val:
+        return None, f"Value must be an integer of at least {min_val}. Received {val}."
+
+    if max_val is not None and val > max_val:
+        return None, f"Value cannot exceed {max_val}. Received {val}."
+
+    return val, None
+
+def handle_set_max_agents_command(orchestrator: BoardOrchestrator, arg: str) -> bool:
+    """Sets the maximum number of dynamic advisors for this specific session thread."""
+    val, err = validate_integer_arg(arg, "set-max-agents", min_val=1, max_val=20)
+    if err:
+        console.print(f"[bold red]❌ {err}[/bold red]\n")
+        return False
+
+    old_val = orchestrator.max_agents
+    orchestrator.max_agents = val
+
+    if orchestrator.advisors and len(orchestrator.advisors) > val:
+        orchestrator.advisors = orchestrator.advisors[:val]
+        orchestrator.advisors_by_tag = {a.tag.lower(): a for a in orchestrator.advisors}
+        orchestrator.advisors_by_id = {a.id: a for a in orchestrator.advisors}
+        console.print(
+            f"[bold green]⚙️ Max agents set to {val} (was {old_val}) for thread {orchestrator.session_id}.[/bold green] "
+            f"[dim]Active board resized to {len(orchestrator.advisors)} advisors.[/dim]\n"
+        )
+    else:
+        console.print(
+            f"[bold green]⚙️ Max agents set to {val} (was {old_val}) for thread {orchestrator.session_id}.[/bold green] "
+            f"[dim](Applies to this session. New sessions reset to default: 10)[/dim]\n"
+        )
+    return True
+
+def handle_set_round_tables_command(orchestrator: BoardOrchestrator, arg: str) -> bool:
+    """Sets the number of deliberation round tables for this specific session thread."""
+    val, err = validate_integer_arg(arg, "set-round-tables", min_val=1, max_val=10)
+    if err:
+        console.print(f"[bold red]❌ {err}[/bold red]\n")
+        return False
+
+    old_val = orchestrator.max_rounds
+    orchestrator.max_rounds = val
+    console.print(
+        f"[bold green]⚙️ Number of round tables set to {val} (was {old_val}) for thread {orchestrator.session_id}.[/bold green] "
+        f"[dim](Applies to this session. New sessions reset to default: 3)[/dim]\n"
+    )
+    return True
+
 def handle_cls_command(orchestrator: BoardOrchestrator):
     """
     Clears the current session state (problem, advisors, debate transcript, and plan)
@@ -581,6 +676,10 @@ async def main(model: Optional[str] = None, effort: Optional[str] = None):
                 await handle_new_command(orchestrator, arg)
             elif cmd in ("cls", "clear"):
                 handle_cls_command(orchestrator)
+            elif cmd == "set-max-agents":
+                handle_set_max_agents_command(orchestrator, arg)
+            elif cmd == "set-round-tables":
+                handle_set_round_tables_command(orchestrator, arg)
             elif cmd in ("advisors", "advisor"):
                 if orchestrator.advisors:
                     render_advisors_table(orchestrator.advisors)

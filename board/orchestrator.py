@@ -13,7 +13,9 @@ from board.invoker import AntigravityInvoker
 
 logger = logging.getLogger(__name__)
 
-MAX_ROUNDS = 3
+DEFAULT_MAX_ROUNDS = 3
+DEFAULT_MAX_AGENTS = 10
+MAX_ROUNDS = DEFAULT_MAX_ROUNDS
 
 class BoardMessage:
     def __init__(self, sender: str, tag: str, content: str, stage: str):
@@ -35,15 +37,16 @@ class BoardMessage:
 class BoardOrchestrator:
     """
     Coordinates the multi-agent chat debate between autonomous board members,
-    supports dynamic generation of problem-tailored advisors (up to 10),
-    handles @mention parsing, targeted question routing, flexible rounds (at most 3),
+    supports dynamic generation of problem-tailored advisors (configurable max_agents, default 10),
+    handles @mention parsing, targeted question routing, configurable rounds (default 3),
     and synthesizes the final Plan of Action.
     """
 
     def __init__(
         self,
         config_path: Optional[Path] = None,
-        max_rounds: int = MAX_ROUNDS,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
+        max_agents: int = DEFAULT_MAX_AGENTS,
         on_message_callback: Optional[Callable[[BoardMessage], None]] = None,
         user_input_callback: Optional[Callable[[Advisor, str], Any]] = None,
         model: str = DEFAULT_MODEL,
@@ -51,6 +54,7 @@ class BoardOrchestrator:
     ):
         self.config_path = config_path or DEFAULT_ADVISORS_CONFIG
         self.max_rounds = max_rounds
+        self.max_agents = max_agents
         self.on_message_callback = on_message_callback
         self.user_input_callback = user_input_callback
         self.model = model
@@ -83,7 +87,7 @@ class BoardOrchestrator:
         self.advisors_by_tag = {}
         self.advisors_by_id = {}
 
-        for a_def in advisor_defs[:10]:  # Cap at 10 advisors
+        for a_def in advisor_defs[:self.max_agents]:  # Cap at max_agents
             adv = Advisor(
                 advisor_id=a_def["id"],
                 name=a_def["name"],
@@ -103,16 +107,17 @@ class BoardOrchestrator:
 
     async def build_dynamic_advisors(self, problem: str) -> List[Advisor]:
         """
-        Dynamically synthesize a bespoke board of at most 10 advisors tailored
+        Dynamically synthesize a bespoke board of at most max_agents advisors tailored
         specifically to the user's decision dilemma.
         """
+        min_adv = 1 if self.max_agents <= 2 else min(3, self.max_agents)
         prompt = f"""You are the Master Executive Search Architect and Corporate Governance Lead.
 The user is facing this strategic decision problem:
 "{problem}"
 
 === OBJECTIVE ===
 Assemble a bespoke, world-class Board of Advisors specifically tailored to evaluate and resolve this exact dilemma.
-Select between 3 and 10 distinct advisors (at most 10). Choose the optimal number based on the multifaceted nature of the challenge (typically 4 to 6).
+Select up to {self.max_agents} distinct advisors (between {min_adv} and {self.max_agents}, at most {self.max_agents}). Choose the optimal number based on the multifaceted nature of the challenge.
 
 Requirements for each advisor:
 1. Diversity of Thought: Include opposing forces (e.g. aggressive growth, downside risk, technical feasibility, legal/compliance, customer value, operational execution).
@@ -381,16 +386,10 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
                     self._record_message("USER", "@User", user_ans.strip(), stage="round_1_user_input")
                     advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
 
-        # Step 2: Flexible Discussion Rounds (Up to MAX_ROUNDS = 3)
+        # Step 2: Flexible Discussion Rounds (Up to self.max_rounds)
         current_round = 2
         while current_round <= self.max_rounds:
-            is_final = (current_round == self.max_rounds)
-
-            # Check if consensus was already reached before round 3
-            if current_round == 3:
-                # Force final round mandate on round 3
-                is_final = True
-
+            is_final = (current_round >= self.max_rounds)
             stage_name = f"round_{current_round}_final" if is_final else f"round_{current_round}_debate"
 
             # Sort advisors: those tagged with direct questions speak first
@@ -444,12 +443,10 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
             if is_final:
                 break
 
-            # If this was round 2, check if consensus reached early
-            if current_round == 2:
-                # Check if there are virtually no pending questions and consensus is reached
+            # If not yet final round, check if consensus reached early
+            if current_round < self.max_rounds:
                 has_pending = any(len(qs) > 0 for qs in pending_questions.values())
                 if not has_pending and await self._check_if_consensus_reached(problem):
-                    # Consensus achieved in round 2!
                     break
 
             current_round += 1
@@ -569,6 +566,8 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
                     "timestamp": datetime.now().isoformat(),
                     "model": self.model,
                     "effort": self.effort,
+                    "max_agents": self.max_agents,
+                    "max_rounds": self.max_rounds,
                     "problem": problem,
                     "advisors": [
                         {
@@ -603,6 +602,9 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         self.messages = []
         self.current_problem = ""
         self.final_plan = ""
+        # Reset per-thread configurations to defaults
+        self.max_agents = DEFAULT_MAX_AGENTS
+        self.max_rounds = DEFAULT_MAX_ROUNDS
         return self.session_id
 
     def clear_session(self) -> str:
@@ -668,12 +670,10 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
                     self._record_message("USER", "@User", user_ans.strip(), stage="pivot_round_1_user_input")
                     advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
 
-        # Discussion Rounds (Up to MAX_ROUNDS = 3)
+        # Discussion Rounds (Up to self.max_rounds)
         current_round = 2
         while current_round <= self.max_rounds:
-            is_final = (current_round == self.max_rounds)
-            if current_round == 3:
-                is_final = True
+            is_final = (current_round >= self.max_rounds)
 
             stage_name = f"pivot_round_{current_round}_final" if is_final else f"pivot_round_{current_round}_debate"
 
@@ -723,7 +723,7 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             if is_final:
                 break
 
-            if current_round == 2:
+            if current_round < self.max_rounds:
                 has_pending = any(len(qs) > 0 for qs in pending_questions.values())
                 if not has_pending and await self._check_if_consensus_reached(new_problem):
                     break
@@ -796,6 +796,10 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
                 self.model = data["model"]
             if "effort" in data:
                 self.effort = data["effort"]
+            if "max_agents" in data:
+                self.max_agents = int(data["max_agents"])
+            if "max_rounds" in data:
+                self.max_rounds = int(data["max_rounds"])
             self.synthesizer_invoker = AntigravityInvoker(model=self.model, effort=self.effort)
 
             # Restore advisors

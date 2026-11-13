@@ -11,6 +11,8 @@ SLASH_COMMANDS = [
     ("/history", "Browse saved sessions to load or delete ('d #')"),
     ("/delete", "Delete a saved session by index or ID"),
     ("/cls", "Clear current session slate without starting a new session"),
+    ("/set-max-agents", "Set max dynamic advisors for this thread (default: 10)"),
+    ("/set-round-tables", "Set deliberation rounds for this thread (default: 3)"),
     ("/advisors", "Show active board members and their tags"),
     ("/plan", "Review the consolidated Plan of Action"),
     ("/memory", "View persistent advisor memories"),
