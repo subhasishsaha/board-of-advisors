@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import subprocess
 import time
 from typing import Optional, Tuple
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 # Windows Process Flags for Detached Mode
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
+
+VALID_EFFORTS = {"low", "medium", "high", "max"}
+MODEL_REGEX = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$")
 
 class AntigravityInvoker:
     """
@@ -25,19 +29,42 @@ class AntigravityInvoker:
         effort: str = DEFAULT_EFFORT,
         timeout: int = DEFAULT_TIMEOUT,
     ):
+        model_str = str(model).strip()
+        if not MODEL_REGEX.fullmatch(model_str) or model_str.startswith("-"):
+            raise ValueError(
+                f"Invalid model name '{model}'. Model must match ^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$ and cannot start with '-'."
+            )
+
+        effort_str = str(effort).strip().lower()
+        if effort_str not in VALID_EFFORTS:
+            raise ValueError(
+                f"Invalid effort level '{effort}'. Must be one of: {', '.join(sorted(VALID_EFFORTS))}"
+            )
+
+        try:
+            timeout_int = int(timeout)
+            if timeout_int <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid timeout '{timeout}'. Timeout must be a positive integer.")
+
         self.executable_path = executable_path or AGY_EXECUTABLE
-        self.model = model
-        self.effort = effort
-        self.timeout = timeout
+        self.model = model_str
+        self.effort = effort_str
+        self.timeout = timeout_int
 
     def build_command(self, prompt: str, output_format: str = "text") -> list[str]:
         """Build the command list for agy non-interactive execution."""
+        safe_format = str(output_format).strip().lower()
+        if safe_format not in {"text", "json", "stream-json"}:
+            safe_format = "text"
+
         return [
             self.executable_path,
             "-p", prompt,
             "--model", self.model,
             "--effort", self.effort,
-            "--output-format", output_format,
+            "--output-format", safe_format,
         ]
 
     def _invoke_sync(self, prompt: str) -> Tuple[bool, str, str]:

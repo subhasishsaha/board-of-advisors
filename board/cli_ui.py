@@ -2,6 +2,7 @@ import re
 from typing import Optional
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -42,10 +43,10 @@ def render_advisors_table(advisors: list) -> None:
         beliefs = getattr(adv, "core_beliefs", None) or (adv.memory.core_beliefs if hasattr(adv, "memory") else [])
         summary = beliefs[0] if beliefs else (adv.bio[:45] if hasattr(adv, "bio") else "")
         table.add_row(
-            f"{adv.avatar} {adv.tag}",
-            adv.name,
-            adv.role,
-            summary,
+            f"{adv.avatar} {escape(adv.tag)}",
+            escape(adv.name),
+            escape(adv.role),
+            escape(summary),
         )
 
     console.print(table)
@@ -80,9 +81,9 @@ def render_sessions_history_table(sessions: list) -> None:
 
         table.add_row(
             str(idx),
-            date_str,
-            prob_snippet,
-            advs,
+            escape(date_str),
+            escape(prob_snippet),
+            escape(advs),
             str(s.get("message_count", 0)),
             has_plan,
         )
@@ -174,7 +175,8 @@ def render_message(msg: BoardMessage, advisor_map: dict) -> None:
     # Advisor message
     adv = advisor_map.get(msg.tag.lower())
     avatar = adv.avatar if adv else "👤"
-    color = adv.color if adv else "cyan"
+    raw_color = adv.color if adv else "cyan"
+    color = raw_color if re.fullmatch(r"^[a-zA-Z0-9_]+$", raw_color) else "cyan"
     role = adv.role if adv else "Advisor"
 
     stage_badge = ""
@@ -187,7 +189,7 @@ def render_message(msg: BoardMessage, advisor_map: dict) -> None:
     elif msg.stage == "followup_response":
         stage_badge = "[Follow-up Response]"
 
-    title = f"{avatar} {msg.sender} ({msg.tag})  •  {role}  {stage_badge}"
+    title = f"{avatar} {escape(msg.sender)} ({escape(msg.tag)})  •  {escape(role)}  {escape(stage_badge)}"
     body = highlight_tags(msg.content)
 
     panel = Panel(

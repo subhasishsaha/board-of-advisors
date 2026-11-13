@@ -18,26 +18,41 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Antigravity CLI discovery
 def find_agy_executable() -> str:
-    """Find the path to the agy (Antigravity CLI) executable."""
+    """Find the path to the agy (Antigravity CLI) executable, preventing CWD / repo hijacking."""
     env_path = os.environ.get("AGY_PATH")
     if env_path:
         try:
-            if os.path.isfile(env_path):
-                return env_path
+            p = Path(env_path).resolve()
+            if p.is_file():
+                return str(p)
         except Exception:
             return env_path
     
+    proj_root = PROJECT_ROOT.resolve()
+    try:
+        cwd = Path.cwd().resolve()
+    except Exception:
+        cwd = proj_root
+
     try:
         which_path = shutil.which("agy")
         if which_path and os.path.isfile(which_path):
-            return which_path
+            which_res = Path(which_path).resolve()
+            # Prevent local CWD / repo executable hijacking (CWE-426)
+            is_in_proj = False
+            try:
+                is_in_proj = which_res.is_relative_to(proj_root) or which_res.is_relative_to(cwd)
+            except (ValueError, AttributeError):
+                pass
+            if not is_in_proj:
+                return str(which_res)
     except Exception:
         pass
 
     # Common Windows install path
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if local_app_data:
-        candidate = Path(local_app_data) / "agy" / "bin" / "agy.exe"
+        candidate = (Path(local_app_data) / "agy" / "bin" / "agy.exe").resolve()
         try:
             if candidate.is_file():
                 return str(candidate)
@@ -50,7 +65,7 @@ def find_agy_executable() -> str:
     # User profile fallback
     user_profile = os.environ.get("USERPROFILE", "")
     if user_profile:
-        candidate = Path(user_profile) / "AppData" / "Local" / "agy" / "bin" / "agy.exe"
+        candidate = (Path(user_profile) / "AppData" / "Local" / "agy" / "bin" / "agy.exe").resolve()
         try:
             if candidate.is_file():
                 return str(candidate)

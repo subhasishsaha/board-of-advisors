@@ -40,9 +40,14 @@ def parse_advisors_json(raw_text: str) -> List[Dict[str, Any]]:
         elif not tag.startswith("@"):
             tag = f"@{tag}"
 
-        adv_id = item.get("id") or re.sub(r"[^\w]", "_", name.lower())
+        raw_id = str(item.get("id") or name.lower())
+        adv_id = re.sub(r"[^\w-]", "_", raw_id).strip("_")
+        if not adv_id:
+            adv_id = f"adv_{idx+1}"
+
         avatar = item.get("avatar") or "👤"
-        color = item.get("color") or available_colors[idx % len(available_colors)]
+        raw_color = str(item.get("color") or available_colors[idx % len(available_colors)]).strip().lower()
+        color = raw_color if re.fullmatch(r"^[a-z0-9_]+$", raw_color) else available_colors[idx % len(available_colors)]
         role = item.get("role", "Strategic Advisor").strip()
         persona = item.get("persona", "").strip()
         bio = item.get("bio", "").strip()

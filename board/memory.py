@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,10 +15,16 @@ class AdvisorMemory:
     """
 
     def __init__(self, advisor_id: str, advisor_name: str, memory_dir: Optional[Path] = None):
-        self.advisor_id = advisor_id
+        clean_id = re.sub(r"[^\w-]", "_", str(advisor_id)).strip("_")
+        if not clean_id:
+            clean_id = "advisor"
+        self.advisor_id = clean_id
         self.advisor_name = advisor_name
-        self.memory_dir = memory_dir or MEMORY_DIR
-        self.memory_file = self.memory_dir / f"{self.advisor_id}.json"
+        self.memory_dir = (memory_dir or MEMORY_DIR).resolve()
+        target_file = (self.memory_dir / f"{self.advisor_id}.json").resolve()
+        if not target_file.is_relative_to(self.memory_dir):
+            raise ValueError(f"Invalid advisor_id resulting in path outside memory dir: '{advisor_id}'")
+        self.memory_file = target_file
 
         self.core_beliefs: List[str] = []
         self.past_decisions: List[Dict[str, Any]] = []

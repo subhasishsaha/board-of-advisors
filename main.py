@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 from rich.panel import Panel
 from rich import box
@@ -165,7 +166,8 @@ def show_memories(orchestrator: BoardOrchestrator):
         return
     for adv in orchestrator.advisors:
         mem_text = adv.memory.format_memory_for_prompt()
-        console.print(f"\n[bold {adv.color}]{adv.avatar} {adv.name} ({adv.tag}) Memory:[/bold {adv.color}]")
+        adv_color = adv.color if re.fullmatch(r"^[a-zA-Z0-9_]+$", adv.color) else "cyan"
+        console.print(f"\n[bold {adv_color}]{adv.avatar} {escape(adv.name)} ({escape(adv.tag)}) Memory:[/bold {adv_color}]")
         console.print(mem_text, style="dim")
     console.print()
 
@@ -214,7 +216,7 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         cmd, arg = parse_command(selection)
 
     if cmd is None:
-        console.print(f"[red]Invalid selection: '{selection}'. Type / for available options.[/red]\n")
+        console.print(f"[red]Invalid selection: '{escape(selection)}'. Type / for available options.[/red]\n")
         return False
 
     if cmd in ("exit", "quit"):
@@ -259,7 +261,7 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
     elif cmd in ("slash", "menu", "options"):
         return await handle_slash_trigger(orchestrator)
     else:
-        console.print(f"[red]Unknown command: /{cmd}. Type / for available options.[/red]\n")
+        console.print(f"[red]Unknown command: /{escape(cmd)}. Type / for available options.[/red]\n")
 
     return True
 
@@ -272,15 +274,16 @@ async def ask_user_callback(advisor: Advisor, question: str) -> str:
     if _active_status:
         _active_status.stop()
 
+    adv_color = advisor.color if re.fullmatch(r"^[a-zA-Z0-9_]+$", advisor.color) else "cyan"
     console.print(
         f"\n[bold yellow]⏸️ Deliberation Suspended:[/bold yellow] "
-        f"[bold {advisor.color}]{advisor.avatar} {advisor.name} ({advisor.tag})[/bold {advisor.color}] "
+        f"[bold {adv_color}]{advisor.avatar} {escape(advisor.name)} ({escape(advisor.tag)})[/bold {adv_color}] "
         f"is asking for your direct input!\n"
     )
 
     prompt_panel = Panel(
         highlight_tags(question),
-        title=f"❓ Direct Inquiry from {advisor.name} (Validated by Chair)",
+        title=f"❓ Direct Inquiry from {escape(advisor.name)} (Validated by Chair)",
         title_align="left",
         border_style="bright_yellow",
         box=box.ROUNDED,
@@ -360,7 +363,7 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
                 success = orchestrator.load_session_by_id(target["session_id"])
                 if success:
                     console.print(f"\n[bold green]✅ Loaded session {target['session_id']} successfully![/bold green]\n")
-                    console.print(f"[bold white]Problem Context:[/bold white] {orchestrator.current_problem}\n")
+                    console.print(f"[bold white]Problem Context:[/bold white] {escape(orchestrator.current_problem)}\n")
                     render_advisors_table(orchestrator.advisors)
                     if orchestrator.final_plan:
                         render_plan(orchestrator.final_plan)
@@ -423,7 +426,7 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
                 target_session = s
                 break
         if not target_session:
-            console.print(f"[red]No session found with ID matching '{target_id}'.[/red]\n")
+            console.print(f"[red]No session found with ID matching '{escape(target_id)}'.[/red]\n")
             return
 
     confirm = (await ask_input(
@@ -454,7 +457,8 @@ def parse_args():
         "-e", "--effort",
         type=str,
         default=DEFAULT_EFFORT,
-        help="Reasoning effort level to use with agy CLI (e.g. 'low', 'medium', 'high')",
+        choices=["low", "medium", "high", "max"],
+        help="Reasoning effort level to use with agy CLI (e.g. 'low', 'medium', 'high', 'max')",
     )
     return parser.parse_args()
 
@@ -693,7 +697,7 @@ async def main(model: Optional[str] = None, effort: Optional[str] = None):
             elif cmd in ("memory", "memories"):
                 show_memories(orchestrator)
             else:
-                console.print(f"[red]Unknown command: /{cmd}.[/red]\n")
+                console.print(f"[red]Unknown command: /{escape(cmd)}.[/red]\n")
                 render_slash_menu(has_board=bool(orchestrator.advisors), has_plan=bool(orchestrator.final_plan))
             continue
 
