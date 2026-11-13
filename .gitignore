@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+storage/sessions/*.json
+!storage/sessions/.gitkeep
+storage/memory/*.json
+!storage/memory/.gitkeep
