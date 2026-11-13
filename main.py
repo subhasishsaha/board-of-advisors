@@ -67,7 +67,7 @@ def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
     if text.startswith("//"):
         return True, "Multiple consecutive slashes detected ('//'). Please run a single command using '/'."
 
-    # Check 2: Compound chaining operators e.g. '/history && /new', '/plan ; /advisors', '/new & /suspend'
+    # Check 2: Compound chaining operators e.g. '/history && /new', '/plan ; /advisors', '/new & /cls'
     chain_separators = [r"&&", r"\|\|", r";", r"\|", r"&"]
     for sep in chain_separators:
         sep_clean = sep.replace("\\", "")
@@ -78,7 +78,7 @@ def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
     if re.match(r"^/\w+/\w+", text):
         return True, f"Chained slash commands detected ('{text.split()[0]}'). Please run one command at a time."
 
-    # Check 4: Multiple slash tokens or command keywords e.g. '/history /new', '/delete 1 /plan', '/new /suspend'
+    # Check 4: Multiple slash tokens or command keywords e.g. '/history /new', '/delete 1 /plan', '/new /cls'
     if text.startswith("/"):
         tokens = text.split()
         if len(tokens) > 1:
@@ -90,11 +90,11 @@ def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
 
             # Check if any subsequent token is a known command keyword
             known_command_names = {
-                "new", "history", "hist", "suspend", "advisors", "advisor",
+                "new", "history", "hist", "cls", "clear", "advisors", "advisor",
                 "plan", "memory", "memories", "help", "exit", "quit", "delete", "del", "rm"
             }
             first_cmd = tokens[0].lstrip("/").lower()
-            if first_cmd in ("history", "advisors", "advisor", "plan", "memory", "memories", "help", "exit", "quit"):
+            if first_cmd in ("history", "advisors", "advisor", "plan", "memory", "memories", "help", "exit", "quit", "cls", "clear"):
                 if tokens[1].lower() in known_command_names:
                     return True, f"Command chaining is not allowed ('{tokens[0]} {tokens[1]}'). Please run one command at a time."
             elif first_cmd in ("delete", "del", "rm"):
@@ -124,7 +124,7 @@ def parse_command(user_input: str) -> Tuple[Optional[str], str]:
     arg = parts[1].strip() if len(parts) > 1 else ""
 
     known_commands = {
-        "new", "history", "hist", "suspend", "advisors", "advisor",
+        "new", "history", "hist", "cls", "clear", "advisors", "advisor",
         "plan", "memory", "memories", "help", "?", "exit", "quit",
         "delete", "del", "rm", "slash", "menu", "options"
     }
@@ -141,7 +141,7 @@ def show_help():
   [yellow]/new [problem][/yellow]       - Create a brand new session with a fresh tailored board
   [yellow]/history[/yellow]             - Browse previous sessions to load or delete ('d #')
   [yellow]/delete <#>[/yellow]          - Delete a specific saved session by index or ID
-  [yellow]/suspend [pivot][/yellow]    - Suspend current deliberation in the SAME session and enter a new problem
+  [yellow]/cls[/yellow]                 - Clear current session slate without starting a new session
   [yellow]/advisors[/yellow]            - Show active board members and their tags
   [yellow]/plan[/yellow]                - Review the consolidated Plan of Action
   [yellow]/memory[/yellow]              - View what advisors have stored in persistent memory
@@ -188,7 +188,7 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         "1": "new",
         "2": "history",
         "3": "delete",
-        "4": "suspend",
+        "4": "cls",
         "5": "advisors",
         "6": "plan",
         "7": "memory",
@@ -217,8 +217,8 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         await handle_delete_command(orchestrator, arg)
     elif cmd == "new":
         await handle_new_command(orchestrator, arg)
-    elif cmd == "suspend":
-        await handle_suspend_command(orchestrator, arg)
+    elif cmd in ("cls", "clear"):
+        handle_cls_command(orchestrator)
     elif cmd in ("advisors", "advisor"):
         if orchestrator.advisors:
             render_advisors_table(orchestrator.advisors)
@@ -339,7 +339,7 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
                     render_advisors_table(orchestrator.advisors)
                     if orchestrator.final_plan:
                         render_plan(orchestrator.final_plan)
-                    console.print("\n[bold cyan]Resumed interactive discussion with this board. You can ask follow-ups, tag advisors, or use /suspend to pivot.[/bold cyan]\n")
+                    console.print("\n[bold cyan]Resumed interactive discussion with this board. You can ask follow-ups, tag advisors, or use /cls to clear.[/bold cyan]\n")
                     return True
                 else:
                     console.print("[bold red]Failed to load selected session.[/bold red]\n")
@@ -414,52 +414,17 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
     else:
         console.print("[dim]Deletion cancelled.[/dim]\n")
 
-async def handle_suspend_command(orchestrator: BoardOrchestrator, arg: str = ""):
+def handle_cls_command(orchestrator: BoardOrchestrator):
     """
-    Suspends current board deliberation in the SAME session, keeps existing advisors,
-    and enters a new problem or pivot.
+    Clears the current session state (problem, advisors, debate transcript, and plan)
+    in the SAME session without starting a new session, and clears the terminal screen.
     """
-    global _active_status
-    if not orchestrator.advisors:
-        console.print("[red]No active board assembled yet. First describe a problem or load a session with /history.[/red]\n")
-        return
-
-    new_problem = arg.strip()
-    if new_problem:
-        is_chained, chain_err = check_command_chaining(f"/suspend {new_problem}")
-        if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
-            return
-
-    console.print(f"\n[bold yellow]⏸️ Suspending Current Board Deliberation (Same Session: {orchestrator.session_id})[/bold yellow]")
-    console.print("[dim]The board remains assembled with all its context, personas, and memory.[/dim]\n")
-
-    if not new_problem:
-        new_problem = await ask_input(
-            "[bold green]Enter new problem, pivot, or sub-task for this board (or / for options)[/bold green]",
-            "<b><ansigreen>Enter new problem, pivot, or sub-task for this board (or / for options)</ansigreen></b> &gt; ",
-        )
-        if not new_problem:
-            console.print("[dim]Suspension cancelled. Resuming current focus.[/dim]\n")
-            return
-        if new_problem in ("/", "/?", "/menu", "/options"):
-            await handle_slash_trigger(orchestrator)
-            return
-        is_chained, chain_err = check_command_chaining(new_problem)
-        if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
-            return
-
-    _active_status = console.status(f"[bold cyan]🏛️ Board is deliberating on the new problem within session {orchestrator.session_id}...[/bold cyan]", spinner="dots")
-    _active_status.start()
-    try:
-        plan = await orchestrator.suspend_and_pivot(new_problem)
-    finally:
-        _active_status.stop()
-        _active_status = None
-
-    console.print("\n[bold green]✅ Deliberation on new problem concluded and Action Plan synthesized![/bold green]\n")
-    render_plan(plan)
+    session_id = orchestrator.clear_session()
+    console.clear()
+    render_banner()
+    console.print(f"[dim]Backend: agy CLI detached mode  |  Model: {DEFAULT_MODEL}  |  Effort: {DEFAULT_EFFORT}[/dim]\n")
+    console.print(f"[bold green]🧹 Current session cleared (Session: {session_id}).[/bold green]")
+    console.print("[dim]The session slate is reset. You can now describe a new dilemma or load history.[/dim]\n")
 
 async def handle_new_command(orchestrator: BoardOrchestrator, arg: str = ""):
     """Starts a completely new session with a new problem and fresh bespoke board."""
@@ -583,8 +548,8 @@ async def main():
                 await handle_delete_command(orchestrator, arg)
             elif cmd == "new":
                 await handle_new_command(orchestrator, arg)
-            elif cmd == "suspend":
-                await handle_suspend_command(orchestrator, arg)
+            elif cmd in ("cls", "clear"):
+                handle_cls_command(orchestrator)
             elif cmd in ("advisors", "advisor"):
                 if orchestrator.advisors:
                     render_advisors_table(orchestrator.advisors)
@@ -607,7 +572,7 @@ async def main():
             # First problem!
             await run_problem_session(orchestrator, raw_input)
             console.print("\n[bold cyan]💬 The board is now open for follow-up questions and discussion.[/bold cyan]")
-            console.print("[dim]Commands: type / for options menu, /suspend to pivot, /new for fresh session, /plan[/dim]\n")
+            console.print("[dim]Commands: type / for options menu, /cls to clear session, /new for fresh session, /plan[/dim]\n")
         else:
             # Active deliberation follow-up
             with console.status("[bold cyan]Advisors are reviewing your follow-up...[/bold cyan]", spinner="dots"):

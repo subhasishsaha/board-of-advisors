@@ -16,7 +16,7 @@ from main import (
     handle_slash_trigger,
     handle_history_command,
     handle_delete_command,
-    handle_suspend_command,
+    handle_cls_command,
     handle_new_command,
     show_help,
     show_memories,
@@ -61,14 +61,16 @@ class TestSlashCommands(unittest.TestCase):
         self.assertEqual(cmd, "new")
         self.assertEqual(arg, "Should we expand to Europe?")
 
-        # Suspend with and without args
-        cmd, arg = parse_command("/suspend")
-        self.assertEqual(cmd, "suspend")
+        # Cls variants
+        cmd, arg = parse_command("/cls")
+        self.assertEqual(cmd, "cls")
         self.assertEqual(arg, "")
 
-        cmd, arg = parse_command("/suspend Pivot to enterprise sales")
-        self.assertEqual(cmd, "suspend")
-        self.assertEqual(arg, "Pivot to enterprise sales")
+        cmd, arg = parse_command("cls")
+        self.assertEqual(cmd, "cls")
+
+        cmd, arg = parse_command("/clear")
+        self.assertEqual(cmd, "clear")
 
         # Delete variants
         cmd, arg = parse_command("/delete 2")
@@ -103,7 +105,7 @@ class TestSlashCommands(unittest.TestCase):
         self.assertTrue(is_chained)
         self.assertIn("Command chaining is not allowed", err)
 
-        is_chained, err = check_command_chaining("/new /suspend")
+        is_chained, err = check_command_chaining("/new /cls")
         self.assertTrue(is_chained)
         self.assertIn("Command chaining is not allowed", err)
 
@@ -133,7 +135,7 @@ class TestSlashCommands(unittest.TestCase):
         self.assertTrue(is_chained)
         self.assertIn(";", err)
 
-        is_chained, err = check_command_chaining("/new & /suspend")
+        is_chained, err = check_command_chaining("/new & /cls")
         self.assertTrue(is_chained)
         self.assertIn("&", err)
 
@@ -164,7 +166,7 @@ class TestSlashCommands(unittest.TestCase):
         self.assertFalse(is_chained)
         self.assertIsNone(err)
 
-        is_chained, err = check_command_chaining("/suspend We need 24/7 technical support")
+        is_chained, err = check_command_chaining("/new We need 24/7 technical support")
         self.assertFalse(is_chained)
         self.assertIsNone(err)
 
@@ -184,7 +186,7 @@ class TestSlashCommands(unittest.TestCase):
         self.assertIn("/new", comp_texts)
         self.assertIn("/history", comp_texts)
         self.assertIn("/delete", comp_texts)
-        self.assertIn("/suspend", comp_texts)
+        self.assertIn("/cls", comp_texts)
         self.assertIn("/advisors", comp_texts)
         self.assertIn("/plan", comp_texts)
         self.assertIn("/memory", comp_texts)
@@ -427,26 +429,36 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(test_file.exists())
 
-    async def test_handle_suspend_command_no_advisors(self):
-        """Verify /suspend when no board is assembled warns cleanly without error."""
-        orchestrator = BoardOrchestrator()
-        orchestrator.advisors = []
-        await handle_suspend_command(orchestrator, "New problem")
-
-    async def test_handle_suspend_command_with_pivot(self):
-        """Verify /suspend pivots in the same session with advisors preserved."""
+    def test_orchestrator_clear_session_preserves_session_id(self):
+        """Verify clear_session clears advisors, problem, messages, and plan in the SAME session without changing session_id."""
         orchestrator = BoardOrchestrator()
         orchestrator._load_predefined_advisors()
+        orchestrator.current_problem = "Existing strategic dilemma"
+        orchestrator.final_plan = "Existing action plan"
         original_session_id = orchestrator.session_id
-        original_advisors_count = len(orchestrator.advisors)
 
-        with patch.object(orchestrator, "suspend_and_pivot", new_callable=AsyncMock) as mock_pivot:
-            mock_pivot.return_value = "Synthesized pivot action plan"
-            await handle_suspend_command(orchestrator, "Focus on cybersecurity compliance")
-            mock_pivot.assert_awaited_once_with("Focus on cybersecurity compliance")
-
+        returned_id = orchestrator.clear_session()
+        self.assertEqual(returned_id, original_session_id)
         self.assertEqual(orchestrator.session_id, original_session_id)
-        self.assertEqual(len(orchestrator.advisors), original_advisors_count)
+        self.assertEqual(orchestrator.current_problem, "")
+        self.assertEqual(orchestrator.final_plan, "")
+        self.assertEqual(orchestrator.advisors, [])
+        self.assertEqual(orchestrator.messages, [])
+
+    def test_handle_cls_command(self):
+        """Verify /cls command clears session state and resets slate without generating a new session."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+        orchestrator.current_problem = "Some dilemma"
+        original_id = orchestrator.session_id
+
+        with patch("rich.console.Console.clear"):
+            handle_cls_command(orchestrator)
+
+        self.assertEqual(orchestrator.session_id, original_id)
+        self.assertEqual(orchestrator.current_problem, "")
+        self.assertEqual(orchestrator.advisors, [])
+        self.assertEqual(orchestrator.final_plan, "")
 
     async def test_handle_new_command_resets_session(self):
         """Verify /new resets session and triggers fresh deliberation."""

@@ -494,6 +494,19 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
         self.final_plan = ""
         return self.session_id
 
+    def clear_session(self) -> str:
+        """
+        Clears current session state (problem, advisors, debate transcript, and plan)
+        in the SAME session without generating a new session_id.
+        """
+        self.advisors = []
+        self.advisors_by_tag = {}
+        self.advisors_by_id = {}
+        self.messages = []
+        self.current_problem = ""
+        self.final_plan = ""
+        return self.session_id
+
     async def suspend_and_pivot(self, new_problem: str, user_context: str = "") -> str:
         """
         Suspends the current deliberation in the SAME session without starting a new session.

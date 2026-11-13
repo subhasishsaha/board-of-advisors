@@ -10,7 +10,7 @@ SLASH_COMMANDS = [
     ("/new", "Start a fresh session with bespoke advisors"),
     ("/history", "Browse saved sessions to load or delete ('d #')"),
     ("/delete", "Delete a saved session by index or ID"),
-    ("/suspend", "Suspend current debate in SAME session and pivot"),
+    ("/cls", "Clear current session slate without starting a new session"),
     ("/advisors", "Show active board members and their tags"),
     ("/plan", "Review the consolidated Plan of Action"),
     ("/memory", "View persistent advisor memories"),

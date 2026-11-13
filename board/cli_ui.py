@@ -112,7 +112,7 @@ def render_slash_menu(has_board: bool = False, has_plan: bool = False) -> None:
         ("1", "/new [problem]", "Start a fresh session with bespoke advisors", "[cyan]Available[/cyan]"),
         ("2", "/history", "Browse saved sessions to load or delete ('d #')", "[cyan]Available[/cyan]"),
         ("3", "/delete <#>", "Delete a saved session by index or ID", "[cyan]Available[/cyan]"),
-        ("4", "/suspend [pivot]", "Suspend current debate in SAME session and pivot", status_board),
+        ("4", "/cls", "Clear current session slate without starting new session", "[cyan]Available[/cyan]"),
         ("5", "/advisors", "Show active board members and their tags", status_board),
         ("6", "/plan", "Review the consolidated Plan of Action", status_plan),
         ("7", "/memory", "View persistent advisor memories", status_board),
