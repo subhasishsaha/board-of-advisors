@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import re
 import sys
@@ -414,6 +415,25 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
     else:
         console.print("[dim]Deletion cancelled.[/dim]\n")
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Executive Board of Advisors - Autonomous Multi-Agent Decision Council",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "-m", "--model",
+        type=str,
+        default=DEFAULT_MODEL,
+        help="Model identifier to use with agy CLI (e.g. 'gemini-3.8-flash-medium', 'gemini-2.5-pro')",
+    )
+    parser.add_argument(
+        "-e", "--effort",
+        type=str,
+        default=DEFAULT_EFFORT,
+        help="Reasoning effort level to use with agy CLI (e.g. 'low', 'medium', 'high')",
+    )
+    return parser.parse_args()
+
 def handle_cls_command(orchestrator: BoardOrchestrator):
     """
     Clears the current session state (problem, advisors, debate transcript, and plan)
@@ -422,7 +442,9 @@ def handle_cls_command(orchestrator: BoardOrchestrator):
     session_id = orchestrator.clear_session()
     console.clear()
     render_banner()
-    console.print(f"[dim]Backend: agy CLI detached mode  |  Model: {DEFAULT_MODEL}  |  Effort: {DEFAULT_EFFORT}[/dim]\n")
+    console.print(
+        f"[dim]Backend: agy CLI detached mode  |  Model: [bold cyan]{orchestrator.model}[/bold cyan]  |  Effort: [bold cyan]{orchestrator.effort}[/bold cyan][/dim]\n"
+    )
     console.print(f"[bold green]🧹 Current session cleared (Session: {session_id}).[/bold green]")
     console.print("[dim]The session slate is reset. You can now describe a new dilemma or load history.[/dim]\n")
 
@@ -478,10 +500,17 @@ async def run_problem_session(orchestrator: BoardOrchestrator, problem: str):
     console.print("\n[bold green]✅ Deliberation concluded and Action Plan synthesized![/bold green]\n")
     render_plan(plan)
 
-async def main():
+async def main(model: Optional[str] = None, effort: Optional[str] = None):
     global _prompt_session
+    if model is None or effort is None:
+        args = parse_args()
+        model = model or args.model
+        effort = effort or args.effort
+
     render_banner()
-    console.print(f"[dim]Backend: agy CLI detached mode  |  Model: {DEFAULT_MODEL}  |  Effort: {DEFAULT_EFFORT}[/dim]\n")
+    console.print(
+        f"[dim]Backend: agy CLI detached mode  |  Model: [bold cyan]{model}[/bold cyan]  |  Effort: [bold cyan]{effort}[/bold cyan][/dim]\n"
+    )
 
     orchestrator = None
 
@@ -493,6 +522,8 @@ async def main():
         orchestrator = BoardOrchestrator(
             on_message_callback=on_message,
             user_input_callback=ask_user_callback,
+            model=model,
+            effort=effort,
         )
     except Exception as e:
         console.print(f"[bold red]Initialization Error:[/bold red] {e}")

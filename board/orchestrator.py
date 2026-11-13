@@ -8,7 +8,7 @@ import yaml
 
 from board.advisor import Advisor
 from board.advisor_builder import parse_advisors_json
-from board.config import DEFAULT_ADVISORS_CONFIG, SESSIONS_DIR
+from board.config import DEFAULT_ADVISORS_CONFIG, SESSIONS_DIR, DEFAULT_MODEL, DEFAULT_EFFORT
 from board.invoker import AntigravityInvoker
 
 logger = logging.getLogger(__name__)
@@ -46,11 +46,15 @@ class BoardOrchestrator:
         max_rounds: int = MAX_ROUNDS,
         on_message_callback: Optional[Callable[[BoardMessage], None]] = None,
         user_input_callback: Optional[Callable[[Advisor, str], Any]] = None,
+        model: str = DEFAULT_MODEL,
+        effort: str = DEFAULT_EFFORT,
     ):
         self.config_path = config_path or DEFAULT_ADVISORS_CONFIG
         self.max_rounds = max_rounds
         self.on_message_callback = on_message_callback
         self.user_input_callback = user_input_callback
+        self.model = model
+        self.effort = effort
 
         self.advisors: List[Advisor] = []
         self.advisors_by_tag: Dict[str, Advisor] = {}
@@ -60,7 +64,7 @@ class BoardOrchestrator:
         self.final_plan: str = ""
         self.session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        self.synthesizer_invoker = AntigravityInvoker()
+        self.synthesizer_invoker = AntigravityInvoker(model=self.model, effort=self.effort)
 
     def _load_predefined_advisors(self) -> None:
         """Fallback to load default predefined advisors from YAML config."""
@@ -90,6 +94,8 @@ class BoardOrchestrator:
                 avatar=a_def.get("avatar", "👤"),
                 color=a_def.get("color", "white"),
                 core_beliefs=a_def.get("core_beliefs", []),
+                model=self.model,
+                effort=self.effort,
             )
             self.advisors.append(adv)
             self.advisors_by_tag[adv.tag.lower()] = adv
@@ -458,6 +464,8 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
                 json.dump({
                     "session_id": self.session_id,
                     "timestamp": datetime.now().isoformat(),
+                    "model": self.model,
+                    "effort": self.effort,
                     "problem": problem,
                     "advisors": [
                         {
@@ -681,6 +689,11 @@ Make the plan actionable, pragmatic, and inspiringly clear."""
             self.session_id = clean_id
             self.current_problem = data.get("problem", "")
             self.final_plan = data.get("final_plan", "")
+            if "model" in data:
+                self.model = data["model"]
+            if "effort" in data:
+                self.effort = data["effort"]
+            self.synthesizer_invoker = AntigravityInvoker(model=self.model, effort=self.effort)
 
             # Restore advisors
             advisor_defs = data.get("advisors", [])

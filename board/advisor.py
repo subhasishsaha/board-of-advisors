@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
+from board.config import DEFAULT_MODEL, DEFAULT_EFFORT
 from board.invoker import AntigravityInvoker
 from board.memory import AdvisorMemory
 
@@ -23,6 +24,8 @@ class Advisor:
         color: str = "white",
         core_beliefs: Optional[List[str]] = None,
         invoker: Optional[AntigravityInvoker] = None,
+        model: str = DEFAULT_MODEL,
+        effort: str = DEFAULT_EFFORT,
     ):
         self.id = advisor_id
         self.name = name
@@ -33,13 +36,15 @@ class Advisor:
         self.avatar = avatar
         self.color = color
         self.core_beliefs = core_beliefs or []
+        self.model = model
+        self.effort = effort
 
         self.memory = AdvisorMemory(advisor_id=self.id, advisor_name=self.name)
         if core_beliefs:
             for b in core_beliefs:
                 self.memory.add_belief(b)
 
-        self.invoker = invoker or AntigravityInvoker()
+        self.invoker = invoker or AntigravityInvoker(model=self.model, effort=self.effort)
 
     def _format_board_directory(self, all_advisors: List["Advisor"]) -> str:
         """Format the roster of other board members and their tags, including @User."""

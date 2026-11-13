@@ -5,12 +5,13 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
-from board.config import SESSIONS_DIR
+from board.config import SESSIONS_DIR, DEFAULT_MODEL, DEFAULT_EFFORT
 from board.orchestrator import BoardOrchestrator
 from board.cli_ui import render_slash_menu
 from board.cli_completer import BoardSlashCompleter, SLASH_COMMANDS
 from prompt_toolkit.document import Document
 from main import (
+    parse_args,
     parse_command,
     check_command_chaining,
     handle_slash_trigger,
@@ -229,6 +230,40 @@ class TestSlashCommands(unittest.TestCase):
         self.assertGreater(len(comps_at), 0)
         first_comp = comps_at[0]
         self.assertTrue(first_comp.text.startswith("@"))
+
+    def test_parse_args_defaults(self):
+        """Verify parse_args defaults to DEFAULT_MODEL and DEFAULT_EFFORT."""
+        with patch("sys.argv", ["main.py"]):
+            args = parse_args()
+            self.assertEqual(args.model, DEFAULT_MODEL)
+            self.assertEqual(args.effort, DEFAULT_EFFORT)
+
+    def test_parse_args_custom(self):
+        """Verify parse_args parses --model and --effort flags and short -m / -e."""
+        with patch("sys.argv", ["main.py", "--model", "gemini-2.5-pro", "--effort", "high"]):
+            args = parse_args()
+            self.assertEqual(args.model, "gemini-2.5-pro")
+            self.assertEqual(args.effort, "high")
+
+        with patch("sys.argv", ["main.py", "-m", "custom-flash", "-e", "low"]):
+            args = parse_args()
+            self.assertEqual(args.model, "custom-flash")
+            self.assertEqual(args.effort, "low")
+
+    def test_orchestrator_custom_model_and_effort(self):
+        """Verify BoardOrchestrator propagates custom model and effort to invokers and advisors."""
+        orchestrator = BoardOrchestrator(model="gemini-2.5-pro", effort="high")
+        self.assertEqual(orchestrator.model, "gemini-2.5-pro")
+        self.assertEqual(orchestrator.effort, "high")
+        self.assertEqual(orchestrator.synthesizer_invoker.model, "gemini-2.5-pro")
+        self.assertEqual(orchestrator.synthesizer_invoker.effort, "high")
+
+        orchestrator._load_predefined_advisors()
+        for adv in orchestrator.advisors:
+            self.assertEqual(adv.model, "gemini-2.5-pro")
+            self.assertEqual(adv.effort, "high")
+            self.assertEqual(adv.invoker.model, "gemini-2.5-pro")
+            self.assertEqual(adv.invoker.effort, "high")
 
     def test_session_creation_loading_and_deletion(self):
         """Verify session JSON persistence, listing, loading, and deletion."""
@@ -485,6 +520,32 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res, "test input")
             runtime_warnings = [item for item in w if issubclass(item.category, RuntimeWarning)]
             self.assertEqual(len(runtime_warnings), 0)
+
+    async def test_session_model_and_effort_persistence(self):
+        """Verify session JSON saves and restores custom model and effort settings."""
+        orchestrator = BoardOrchestrator(model="custom-exp-model", effort="high")
+        test_session_id = f"test_meta_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        test_file = SESSIONS_DIR / f"session_{test_session_id}.json"
+
+        orchestrator.session_id = test_session_id
+        orchestrator._load_predefined_advisors()
+        orchestrator._save_session_memories("Test dilemma", "Test plan")
+
+        self.assertTrue(test_file.exists())
+        with open(test_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data.get("model"), "custom-exp-model")
+        self.assertEqual(data.get("effort"), "high")
+
+        # Now load with a new orchestrator and verify model/effort are restored
+        new_orchestrator = BoardOrchestrator()
+        new_orchestrator.load_session_by_id(test_session_id)
+        self.assertEqual(new_orchestrator.model, "custom-exp-model")
+        self.assertEqual(new_orchestrator.effort, "high")
+        self.assertEqual(new_orchestrator.synthesizer_invoker.model, "custom-exp-model")
+        self.assertEqual(new_orchestrator.synthesizer_invoker.effort, "high")
+
+        test_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
