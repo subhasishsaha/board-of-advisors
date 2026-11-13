@@ -22,15 +22,20 @@ Powered by **Gemini 3.8 Flash** with **medium reasoning effort**, orchestrated u
    - Advisors dynamically tag other advisors with `@tags` to challenge them directly.
    - The orchestrator extracts mentions, routes directed inquiries, and gives priority speaking turns to tagged advisors so questions are answered head-on.
 
-4. **Per-Advisor Persistent Memory**:
+4. **In-Deliberation User Inquiries & Automatic Suspension/Resumption**:
+   - Advisors can tag `@User` in between their deliberations if they need your direct input, risk tolerance, budget ceiling, or specific preferences to make a sound decision.
+   - The orchestrator automatically detects when an advisor asks for your input, suspends the round table deliberation, and prompts you to answer the specific question.
+   - Once you respond, the orchestrator records your answer into the deliberation transcript and seamlessly resumes the round table so subsequent advisors immediately incorporate your guidance.
+
+5. **Per-Advisor Persistent Memory**:
    - Each advisor maintains private long-term memory stored under `storage/memory/<advisor_id>.json`.
    - Remembers past stances, problem contexts, and impressions of fellow board members across sessions.
 
-5. **Antigravity CLI Detached Execution**:
+6. **Antigravity CLI Detached Execution**:
    - Every LLM agent turn is invoked via the `agy` CLI using `--print` in detached, non-blocking mode (`stdin=subprocess.DEVNULL`, Windows no-window process creation).
    - Configured with `gemini-3.8-flash-medium` and `--effort medium`.
 
-6. **Consolidated Plan of Action & Follow-Up**:
+7. **Consolidated Plan of Action & Follow-Up**:
    - Synthesizes the debate into an executive decision, immediate 2-week actions, 30/60/90-day validation gates, risk mitigations, and closing verdicts.
    - Interactive chat loop allows you to ask follow-up questions, tag individual advisors, or convene a new bespoke council with `/new`.
 

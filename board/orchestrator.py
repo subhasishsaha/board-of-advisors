@@ -45,10 +45,12 @@ class BoardOrchestrator:
         config_path: Optional[Path] = None,
         max_rounds: int = MAX_ROUNDS,
         on_message_callback: Optional[Callable[[BoardMessage], None]] = None,
+        user_input_callback: Optional[Callable[[Advisor, str], Any]] = None,
     ):
         self.config_path = config_path or DEFAULT_ADVISORS_CONFIG
         self.max_rounds = max_rounds
         self.on_message_callback = on_message_callback
+        self.user_input_callback = user_input_callback
 
         self.advisors: List[Advisor] = []
         self.advisors_by_tag: Dict[str, Advisor] = {}
@@ -163,6 +165,34 @@ Output ONLY a valid JSON array of advisor objects with these exact keys:
                 mentions.append(self.advisors_by_tag[clean_tag].tag)
         return list(dict.fromkeys(mentions))
 
+    def check_user_mention(self, text: str) -> Optional[str]:
+        """
+        Check if the text contains a direct tag or question addressed to the user (@User).
+        Returns the extracted question/inquiry or None.
+        """
+        if not re.search(r"@user\b", text, re.IGNORECASE):
+            return None
+
+        # Extract sentences containing @User
+        sentences = re.split(r"(?<=[.?!])\s+", text)
+        matched = [s.strip() for s in sentences if re.search(r"@user\b", s, re.IGNORECASE)]
+        if matched:
+            return " ".join(matched)
+        return text.strip()
+
+    async def _request_user_input(self, advisor: Advisor, question: str) -> Optional[str]:
+        """Invoke the callback to suspend round table and get user input."""
+        if not self.user_input_callback:
+            return None
+        try:
+            res = self.user_input_callback(advisor, question)
+            if asyncio.iscoroutine(res):
+                return await res
+            return res
+        except Exception as e:
+            logger.error(f"Error obtaining user input: {e}")
+            return None
+
     async def _check_if_consensus_reached(self, problem: str) -> bool:
         """
         Check if the board has reached substantial alignment and can conclude
@@ -229,6 +259,18 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
             for t in tags:
                 pending_questions[t].append(f"From {advisor.name} ({advisor.tag}): {response[:150]}...")
 
+        # If any opening assessment asked @User for critical input, suspend and collect it
+        for res in initial_results:
+            if isinstance(res, Exception):
+                continue
+            advisor, response = res
+            user_q = self.check_user_mention(response)
+            if user_q and self.user_input_callback:
+                user_ans = await self._request_user_input(advisor, user_q)
+                if user_ans and user_ans.strip():
+                    self._record_message("USER", "@User", user_ans.strip(), stage="round_1_user_input")
+                    advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
+
         # Step 2: Flexible Discussion Rounds (Up to MAX_ROUNDS = 3)
         current_round = 2
         while current_round <= self.max_rounds:
@@ -264,6 +306,19 @@ Reply with ONLY 'YES' if consensus is reached, or 'NO' if there are still active
 
                     # Clear handled questions
                     pending_questions[advisor.tag] = []
+
+                    # If advisor tagged @User for input, suspend deliberation and wait for user's response
+                    user_q = self.check_user_mention(response)
+                    if user_q and self.user_input_callback:
+                        user_ans = await self._request_user_input(advisor, user_q)
+                        if user_ans and user_ans.strip():
+                            self._record_message(
+                                "USER",
+                                "@User",
+                                user_ans.strip(),
+                                stage=f"{stage_name}_user_input",
+                            )
+                            advisor.memory.add_working_note(f"User clarified: {user_ans[:80]}")
 
                     # If not final round, extract new tags for subsequent turn
                     if not is_final:

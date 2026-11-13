@@ -67,11 +67,14 @@ def highlight_tags(text: str) -> Text:
 def render_message(msg: BoardMessage, advisor_map: dict) -> None:
     """Render an individual advisor message with rich panel styling."""
     if msg.sender == "USER":
+        title = "👤 You (User)"
+        if "user_input" in msg.stage or "clarification" in msg.stage:
+            title = "👤 You (User)  [In-Deliberation Input / Clarification]"
         panel = Panel(
             highlight_tags(msg.content),
-            title="👤 You (User)",
+            title=title,
             title_align="left",
-            border_style="blue",
+            border_style="bright_blue",
             box=box.ROUNDED,
             padding=(0, 1),
         )
