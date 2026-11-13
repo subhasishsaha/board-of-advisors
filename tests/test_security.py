@@ -335,3 +335,18 @@ class TestSec06RichMarkupEscaping:
 
         # Should render cleanly without throwing MarkupError
         render_message(msg, advisor_map)
+
+    def test_error_messages_with_closing_markup_tags_do_not_crash(self):
+        from main import (
+            handle_set_max_agents_command,
+            handle_set_round_tables_command,
+            check_command_chaining,
+        )
+        orchestrator = BoardOrchestrator()
+        # These should fail gracefully without throwing MarkupError
+        assert handle_set_max_agents_command(orchestrator, "[/malicious]") is False
+        assert handle_set_round_tables_command(orchestrator, "[/malicious]") is False
+
+        is_chained, err = check_command_chaining("/history /[/injection]")
+        assert is_chained is True
+        assert "[/injection]" in err

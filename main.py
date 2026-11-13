@@ -192,7 +192,7 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
     # Prevent chaining in the options prompt
     is_chained, chain_err = check_command_chaining(selection)
     if is_chained:
-        console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+        console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
         return False
 
     num_map = {
@@ -329,7 +329,7 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
         # Prevent chained delete commands
         is_chained, chain_err = check_command_chaining(choice)
         if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
             continue
 
         # Check for delete syntax: 'd 2', 'del 2', 'delete 2', 'rm 2', 'd2'
@@ -392,7 +392,7 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
     if arg:
         is_chained, chain_err = check_command_chaining(f"/delete {arg}")
         if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
             return
         arg_clean = arg.strip().lstrip("#")
         if arg_clean.isdigit():
@@ -497,7 +497,7 @@ def handle_set_max_agents_command(orchestrator: BoardOrchestrator, arg: str) -> 
     """Sets the maximum number of dynamic advisors for this specific session thread."""
     val, err = validate_integer_arg(arg, "set-max-agents", min_val=1, max_val=20)
     if err:
-        console.print(f"[bold red]❌ {err}[/bold red]\n")
+        console.print(f"[bold red]❌ {escape(err)}[/bold red]\n")
         return False
 
     old_val = orchestrator.max_agents
@@ -522,7 +522,7 @@ def handle_set_round_tables_command(orchestrator: BoardOrchestrator, arg: str) -
     """Sets the number of deliberation round tables for this specific session thread."""
     val, err = validate_integer_arg(arg, "set-round-tables", min_val=1, max_val=10)
     if err:
-        console.print(f"[bold red]❌ {err}[/bold red]\n")
+        console.print(f"[bold red]❌ {escape(err)}[/bold red]\n")
         return False
 
     old_val = orchestrator.max_rounds
@@ -553,7 +553,7 @@ async def handle_new_command(orchestrator: BoardOrchestrator, arg: str = ""):
     if new_problem:
         is_chained, chain_err = check_command_chaining(f"/new {new_problem}")
         if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
             return
 
     console.print("\n[bold yellow]🆕 Starting a brand new session...[/bold yellow]")
@@ -570,7 +570,7 @@ async def handle_new_command(orchestrator: BoardOrchestrator, arg: str = ""):
             return
         is_chained, chain_err = check_command_chaining(new_problem)
         if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
             return
 
     orchestrator.reset_session()
@@ -608,7 +608,7 @@ async def main(model: Optional[str] = None, effort: Optional[str] = None):
 
     render_banner()
     console.print(
-        f"[dim]Backend: agy CLI detached mode  |  Model: [bold cyan]{model}[/bold cyan]  |  Effort: [bold cyan]{effort}[/bold cyan][/dim]\n"
+        f"[dim]Backend: agy CLI detached mode  |  Model: [bold cyan]{escape(str(model))}[/bold cyan]  |  Effort: [bold cyan]{escape(str(effort))}[/bold cyan][/dim]\n"
     )
 
     orchestrator = None
@@ -625,7 +625,7 @@ async def main(model: Optional[str] = None, effort: Optional[str] = None):
             effort=effort,
         )
     except Exception as e:
-        console.print(f"[bold red]Initialization Error:[/bold red] {e}")
+        console.print(f"[bold red]Initialization Error:[/bold red] {escape(str(e))}")
         sys.exit(1)
 
     _prompt_session = get_interactive_prompt_session(
@@ -654,7 +654,7 @@ async def main(model: Optional[str] = None, effort: Optional[str] = None):
         # 1. Check for command chaining and prevent it
         is_chained, chain_err = check_command_chaining(raw_input)
         if is_chained:
-            console.print(f"\n[bold red]⛔ {chain_err}[/bold red]\n")
+            console.print(f"\n[bold red]⛔ {escape(chain_err)}[/bold red]\n")
             continue
 
         # 2. Check for single slash trigger to show options menu
