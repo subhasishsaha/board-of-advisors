@@ -7,6 +7,8 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
 from rich import box
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
 
 from board.config import DEFAULT_MODEL, DEFAULT_EFFORT
 from board.cli_ui import (
@@ -21,9 +23,35 @@ from board.cli_ui import (
 )
 from board.orchestrator import BoardOrchestrator, BoardMessage
 from board.advisor import Advisor
+from board.cli_completer import (
+    BoardSlashCompleter,
+    get_interactive_prompt_session,
+)
 
 # Global status tracker for clean suspension and resumption
 _active_status = None
+_prompt_session: Optional[PromptSession] = None
+
+def ask_input(
+    prompt_rich: str,
+    prompt_html: str,
+    default: str = "",
+) -> str:
+    """
+    Prompts the user. If an interactive TTY is available, uses prompt_toolkit
+    with live autocomplete dropdown on '/' (matching Claude Code & Antigravity).
+    Otherwise, gracefully falls back to rich.prompt.Prompt.ask().
+    """
+    global _prompt_session
+    if _prompt_session is not None and sys.stdin.isatty():
+        try:
+            val = _prompt_session.prompt(HTML(prompt_html), default=default).strip()
+            return val
+        except (KeyboardInterrupt, EOFError):
+            raise
+        except Exception:
+            pass
+    return Prompt.ask(prompt_rich, default=default).strip()
 
 def check_command_chaining(raw_input: str) -> Tuple[bool, Optional[str]]:
     """
@@ -140,10 +168,10 @@ async def handle_slash_trigger(orchestrator: BoardOrchestrator) -> bool:
         has_board=bool(orchestrator.advisors),
         has_plan=bool(orchestrator.final_plan),
     )
-    selection = Prompt.ask(
+    selection = ask_input(
         "[bold yellow]Select an option [1-9], type a command, or press Enter to return[/bold yellow]",
-        default="",
-    ).strip()
+        "<b><ansiyellow>Select an option [1-9], type a command, or press Enter to return</ansiyellow></b> &gt; ",
+    )
 
     if not selection:
         console.print("[dim]Returned to prompt.[/dim]\n")
@@ -235,7 +263,10 @@ async def ask_user_callback(advisor: Advisor, question: str) -> str:
     console.print(prompt_panel)
     console.print()
 
-    user_answer = Prompt.ask("[bold blue]Your Answer / Input[/bold blue]").strip()
+    user_answer = ask_input(
+        "[bold blue]Your Answer / Input[/bold blue]",
+        "<b><ansiblue>Your Answer / Input</ansiblue></b> &gt; ",
+    )
     console.print("\n[dim]▶️ Input received. Resuming round table deliberation...[/dim]\n")
 
     if _active_status:
@@ -252,10 +283,10 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
             return False
 
         render_sessions_history_table(sessions)
-        choice = Prompt.ask(
+        choice = ask_input(
             "[bold yellow]Select a session # to load, 'd #' to delete, or press Enter to return[/bold yellow]",
-            default="",
-        ).strip()
+            "<b><ansiyellow>Select a session # to load, 'd #' to delete, or press Enter to return</ansiyellow></b> &gt; ",
+        )
 
         if not choice:
             console.print("[dim]History browser closed.[/dim]\n")
@@ -278,10 +309,11 @@ async def handle_history_command(orchestrator: BoardOrchestrator) -> bool:
             del_idx = int(del_match.group(1))
             if 1 <= del_idx <= len(sessions):
                 target = sessions[del_idx - 1]
-                confirm = Prompt.ask(
+                confirm = ask_input(
                     f"[bold red]Are you sure you want to delete session #{del_idx} ({target['session_id']})? [y/N][/bold red]",
+                    f"<b><ansired>Are you sure you want to delete session #{del_idx} ({target['session_id']})? [y/N]</ansired></b> &gt; ",
                     default="n",
-                ).strip().lower()
+                ).lower()
                 if confirm in ("y", "yes"):
                     if orchestrator.delete_session_by_id(target["session_id"]):
                         console.print(f"[bold green]🗑️ Session #{del_idx} ({target['session_id']}) deleted successfully.[/bold green]\n")
@@ -340,7 +372,10 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
             target_id = arg_clean
     else:
         render_sessions_history_table(sessions)
-        choice = Prompt.ask("[bold yellow]Enter session # to delete (or Enter to cancel)[/bold yellow]", default="").strip()
+        choice = ask_input(
+            "[bold yellow]Enter session # to delete (or Enter to cancel)[/bold yellow]",
+            "<b><ansiyellow>Enter session # to delete (or Enter to cancel)</ansiyellow></b> &gt; ",
+        )
         if not choice:
             console.print("[dim]Deletion cancelled.[/dim]\n")
             return
@@ -365,10 +400,11 @@ async def handle_delete_command(orchestrator: BoardOrchestrator, arg: str):
             console.print(f"[red]No session found with ID matching '{target_id}'.[/red]\n")
             return
 
-    confirm = Prompt.ask(
+    confirm = ask_input(
         f"[bold red]Are you sure you want to delete session {target_session['session_id']}? [y/N][/bold red]",
+        f"<b><ansired>Are you sure you want to delete session {target_session['session_id']}? [y/N]</ansired></b> &gt; ",
         default="n",
-    ).strip().lower()
+    ).lower()
     if confirm in ("y", "yes"):
         if orchestrator.delete_session_by_id(target_session["session_id"]):
             console.print(f"[bold green]🗑️ Session {target_session['session_id']} deleted successfully.[/bold green]\n")
@@ -398,7 +434,10 @@ async def handle_suspend_command(orchestrator: BoardOrchestrator, arg: str = "")
     console.print("[dim]The board remains assembled with all its context, personas, and memory.[/dim]\n")
 
     if not new_problem:
-        new_problem = Prompt.ask("[bold green]Enter new problem, pivot, or sub-task for this board (or / for options)[/bold green]").strip()
+        new_problem = ask_input(
+            "[bold green]Enter new problem, pivot, or sub-task for this board (or / for options)[/bold green]",
+            "<b><ansigreen>Enter new problem, pivot, or sub-task for this board (or / for options)</ansigreen></b> &gt; ",
+        )
         if not new_problem:
             console.print("[dim]Suspension cancelled. Resuming current focus.[/dim]\n")
             return
@@ -432,7 +471,10 @@ async def handle_new_command(orchestrator: BoardOrchestrator, arg: str = ""):
 
     console.print("\n[bold yellow]🆕 Starting a brand new session...[/bold yellow]")
     if not new_problem:
-        new_problem = Prompt.ask("[bold green]Enter your problem for the new session (or / for options)[/bold green]").strip()
+        new_problem = ask_input(
+            "[bold green]Enter your problem for the new session (or / for options)[/bold green]",
+            "<b><ansigreen>Enter your problem for the new session (or / for options)</ansigreen></b> &gt; ",
+        )
         if not new_problem:
             console.print("[dim]New session cancelled.[/dim]\n")
             return
@@ -471,6 +513,7 @@ async def run_problem_session(orchestrator: BoardOrchestrator, problem: str):
     render_plan(plan)
 
 async def main():
+    global _prompt_session
     render_banner()
     console.print(f"[dim]Backend: agy CLI detached mode  |  Model: {DEFAULT_MODEL}  |  Effort: {DEFAULT_EFFORT}[/dim]\n")
 
@@ -489,17 +532,22 @@ async def main():
         console.print(f"[bold red]Initialization Error:[/bold red] {e}")
         sys.exit(1)
 
+    _prompt_session = get_interactive_prompt_session(
+        get_advisors_fn=lambda: orchestrator.advisors if orchestrator else []
+    )
+
     console.print("[bold yellow]Describe your strategic dilemma, or type / to see available options:[/bold yellow]\n")
 
     while True:
-        prompt_label = (
-            "[bold green]Your Dilemma (type / for options)[/bold green]"
-            if not orchestrator.current_problem
-            else "[bold blue]You (type / for options)[/bold blue]"
-        )
+        if not orchestrator.current_problem:
+            prompt_rich = "[bold green]Your Dilemma (type / for options)[/bold green]"
+            prompt_html = "<b><ansigreen>Your Dilemma (type / for options)</ansigreen></b> &gt; "
+        else:
+            prompt_rich = "[bold blue]You (type / for options)[/bold blue]"
+            prompt_html = "<b><ansiblue>You (type / for options)</ansiblue></b> &gt; "
 
         try:
-            raw_input = Prompt.ask(prompt_label).strip()
+            raw_input = ask_input(prompt_rich, prompt_html)
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session terminated.[/dim]")
             break

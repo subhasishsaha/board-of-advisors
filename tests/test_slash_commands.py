@@ -8,6 +8,8 @@ from unittest.mock import patch, AsyncMock
 from board.config import SESSIONS_DIR
 from board.orchestrator import BoardOrchestrator
 from board.cli_ui import render_slash_menu
+from board.cli_completer import BoardSlashCompleter, SLASH_COMMANDS
+from prompt_toolkit.document import Document
 from main import (
     parse_command,
     check_command_chaining,
@@ -169,6 +171,62 @@ class TestSlashCommands(unittest.TestCase):
         is_chained, err = check_command_chaining("Should we launch on 2026/11/15 or wait?")
         self.assertFalse(is_chained)
         self.assertIsNone(err)
+
+    def test_board_slash_completer_shows_options_on_slash(self):
+        """Verify BoardSlashCompleter instantly yields all options when '/' is typed (Claude/Antigravity style)."""
+        completer = BoardSlashCompleter()
+        doc = Document("/")
+        completions = list(completer.get_completions(doc, None))
+
+        # Must yield all 9 slash commands
+        self.assertEqual(len(completions), len(SLASH_COMMANDS))
+        comp_texts = [c.text for c in completions]
+        self.assertIn("/new", comp_texts)
+        self.assertIn("/history", comp_texts)
+        self.assertIn("/delete", comp_texts)
+        self.assertIn("/suspend", comp_texts)
+        self.assertIn("/advisors", comp_texts)
+        self.assertIn("/plan", comp_texts)
+        self.assertIn("/memory", comp_texts)
+        self.assertIn("/help", comp_texts)
+        self.assertIn("/exit", comp_texts)
+
+        # Verify descriptions (display_meta) are populated
+        for c in completions:
+            self.assertTrue(len(str(c.display_meta)) > 5)
+
+        # Verify real-time prefix filtering: typing '/h' filters down to '/history' and '/help'
+        doc_h = Document("/h")
+        comps_h = list(completer.get_completions(doc_h, None))
+        self.assertEqual(len(comps_h), 2)
+        self.assertSetEqual({c.text for c in comps_h}, {"/history", "/help"})
+
+    def test_board_slash_completer_prevents_chaining(self):
+        """Verify BoardSlashCompleter suppresses completions if space or chained command is present."""
+        completer = BoardSlashCompleter()
+
+        # Once a space is typed (e.g. '/new '), no slash commands should be suggested
+        doc_spaced = Document("/new ")
+        comps_spaced = list(completer.get_completions(doc_spaced, None))
+        self.assertEqual(len(comps_spaced), 0)
+
+        # Chained attempt in prompt
+        doc_chained = Document("/new /")
+        comps_chained = list(completer.get_completions(doc_chained, None))
+        self.assertEqual(len(comps_chained), 0)
+
+    def test_board_slash_completer_advisor_mentions(self):
+        """Verify BoardSlashCompleter yields advisor @tag completions when typing '@'."""
+        orchestrator = BoardOrchestrator()
+        orchestrator._load_predefined_advisors()
+
+        completer = BoardSlashCompleter(get_advisors_fn=lambda: orchestrator.advisors)
+        doc_at = Document("@")
+        comps_at = list(completer.get_completions(doc_at, None))
+
+        self.assertGreater(len(comps_at), 0)
+        first_comp = comps_at[0]
+        self.assertTrue(first_comp.text.startswith("@"))
 
     def test_session_creation_loading_and_deletion(self):
         """Verify session JSON persistence, listing, loading, and deletion."""
