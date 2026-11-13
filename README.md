@@ -159,6 +159,9 @@ All 56 tests cover:
 
 ```
 board-of-advisors/
+├── .github/
+│   └── workflows/
+│       └── tests.yml        # GitHub Actions CI matrix test runner
 ├── .venv/                   # Python virtual environment
 ├── config/
 │   └── advisors.yaml        # Fallback advisor profiles
