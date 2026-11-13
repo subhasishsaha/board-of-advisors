@@ -463,6 +463,17 @@ class TestAsyncCommandFlows(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.current_problem, "")
         self.assertEqual(orchestrator.advisors, [])
 
+    async def test_ask_input_async_execution_no_warnings(self):
+        """Verify ask_input executes cleanly as an awaited coroutine in active asyncio loop without RuntimeWarning."""
+        import warnings
+        from main import ask_input
+        with warnings.catch_warnings(record=True) as w, \
+             patch("rich.prompt.Prompt.ask", return_value="test input"):
+            res = await ask_input("Prompt Rich", "<b>Prompt HTML</b>")
+            self.assertEqual(res, "test input")
+            runtime_warnings = [item for item in w if issubclass(item.category, RuntimeWarning)]
+            self.assertEqual(len(runtime_warnings), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
